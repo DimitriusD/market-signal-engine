@@ -1,156 +1,111 @@
-# Hexagonal Service Template
+# market-signal-engine
 
-A Spring Boot microservice template following **hexagonal architecture** (ports & adapters) with Gradle multi-module setup.
+Event-driven Kafka Avro service that consumes market feature snapshots and produces interpreted market signal snapshots.
+
+## What it does
+
+`market-signal-engine` reads normalized market feature snapshots from Kafka, evaluates explainable signal rules in a pure domain/application core, and publishes (or temporarily logs) market signal snapshots.
+
+## Input
+
+| Property | Value |
+|----------|-------|
+| Topic | `state.market.features.v1` |
+| Key | `instrumentId` |
+| Value | `com.trading.contracts.feature.MarketFeaturesSnapshotEvent` |
+
+## Output
+
+| Property | Value |
+|----------|-------|
+| Topic | `state.market.signals.v1` |
+| Key | `instrumentId` |
+| Value | `com.trading.contracts.signal.MarketSignalSnapshotEvent` |
+
+Output publisher is temporarily implemented as `LoggingMarketSignalSnapshotPublisher` until signal Avro contracts are published in `trading-schemas`.
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                    infrastructure/app                            │
-│              (Spring Boot, wiring, composition)                  │
-├──────────┬──────────────────┬──────────────┬────────────────────┤
-│ rest-api │ jdbc-storage-    │ event-       │  (your custom      │
-│ (HTTP    │ adapter          │ adapter      │   adapters...)      │
-│  driving │ (Postgres driven │ (Kafka driven│                    │
-│  adapter)│  adapter)        │  adapter)    │                    │
-├──────────┴──────────────────┴──────────────┴────────────────────┤
-│                        application                               │
-│     domain/model  │  port/input  │  port/output  │  service     │
-│     domain/exception                                             │
-└─────────────────────────────────────────────────────────────────┘
+market-signal-engine
+    ├── application              # domain models, rules, use cases, ports (no Kafka/Avro/Spring)
+    └── infrastructure
+        ├── app                  # Spring Boot composition root
+        └── event-adapter        # Kafka Avro consumer, mappers, publisher adapter
 ```
 
-### Modules
+Runtime flow:
 
-| Module | Purpose |
-|--------|---------|
-| `application` | Domain models, input/output ports (interfaces), application services. No framework dependencies. |
-| `infrastructure/app` | Spring Boot entrypoint. Wires ports to adapter implementations via `InfrastructureConfig`. |
-| `infrastructure/rest-api` | HTTP driving adapter. OpenAPI-first code generation + hand-written controllers and MapStruct mappers. |
-| `infrastructure/jdbc-storage-adapter` | PostgreSQL persistence via Spring Data JDBC. Flyway migrations. |
-| `infrastructure/event-adapter` | Kafka event publishing. Implements output ports for domain events. |
+```
+state.market.features.v1
+    ↓
+MarketFeaturesKafkaConsumer
+    ↓
+MarketFeaturesEventMapper
+    ↓
+domain MarketFeaturesSnapshot
+    ↓
+EvaluateMarketSignalsUseCase
+    ↓
+DefaultMarketSignalEngine
+    ↓
+domain MarketSignalSnapshot
+    ↓
+LoggingMarketSignalSnapshotPublisher (temporary)
+    ↓
+state.market.signals.v1 (when Avro contract is available)
+```
 
-### Key patterns
+## Local setup
 
-- **Ports & Adapters**: domain logic in `application` depends on nothing; adapters implement ports
-- **OpenAPI-first**: REST API defined in `openapi.yaml`, interfaces generated at build time
-- **MapStruct**: type-safe mapping between layers (web DTOs <-> domain <-> entities)
-- **Flyway**: versioned database migrations
-- **Version catalog**: all dependency versions centralized in `gradle/libs.versions.toml`
+Publish external schema dependencies to Maven Local:
 
-## Tech Stack
+```bash
+cd ../trading-schemas
+./gradlew clean publishToMavenLocal
+
+cd ../trading-common
+./gradlew clean publishToMavenLocal
+```
+
+Start Kafka infrastructure and run the service:
+
+```bash
+cd ../market-signal-engine
+docker compose up -d
+./gradlew clean build
+./gradlew :infrastructure:app:bootRun
+```
+
+## Environment variables
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `APP_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka bootstrap servers |
+| `APP_SCHEMA_REGISTRY_URL` | `http://localhost:8081` | Confluent Schema Registry URL |
+| `APP_KAFKA_CONSUMER_GROUP_ID` | `market-signal-engine` | Kafka consumer group id |
+| `APP_KAFKA_TOPIC_MARKET_FEATURES` | `state.market.features.v1` | Input topic for feature snapshots |
+| `APP_KAFKA_TOPIC_MARKET_SIGNALS` | `state.market.signals.v1` | Output topic for signal snapshots |
+| `APP_SIGNAL_SET_VERSION` | `mse-signals-v1` | Signal set version label |
+| `APP_SIGNAL_MAX_SPREAD_BPS` | `2.0` | Max acceptable spread in bps |
+| `APP_SIGNAL_BUY_SIGNED_TRADE_FLOW_5S_THRESHOLD` | `0.0` | Buy pressure threshold for signedTradeFlow5s |
+| `APP_SIGNAL_SELL_SIGNED_TRADE_FLOW_5S_THRESHOLD` | `0.0` | Sell pressure threshold for signedTradeFlow5s |
+| `APP_SIGNAL_BUY_BOOK_IMBALANCE_THRESHOLD` | `0.60` | Bullish top5Imbalance threshold |
+| `APP_SIGNAL_SELL_BOOK_IMBALANCE_THRESHOLD` | `-0.60` | Bearish top5Imbalance threshold |
+| `APP_SIGNAL_MAX_SHORT_TERM_VOLATILITY_1S` | `0.01` | Max acceptable short-term volatility |
+
+## Tech stack
 
 - Java 21
 - Spring Boot 3.3.x
 - Gradle 9.x (Kotlin DSL)
-- PostgreSQL 17
-- Apache Kafka
-- Flyway
-- MapStruct + Lombok
-- OpenAPI Generator
-- Testcontainers
+- Apache Kafka + Confluent Schema Registry (Avro)
+- Hexagonal architecture (ports & adapters)
 
-## Quick Start
+## Modules
 
-### 1. Initialize for your project
-
-Run the init script to rename packages and project:
-
-```powershell
-# PowerShell
-.\init.ps1 -ProjectName "order-service" -Group "com.mycompany" -BasePackage "com.mycompany.orders"
-```
-
-```bash
-# Bash
-./init.sh order-service com.mycompany com.mycompany.orders
-```
-
-### 2. Start infrastructure
-
-```bash
-docker compose up -d
-```
-
-### 3. Build & run
-
-```bash
-./gradlew build
-./gradlew :infrastructure:app:bootRun
-```
-
-### 4. Test the API
-
-```bash
-# Create an item
-curl -X POST http://localhost:8080/api/v1/items \
-  -H "Content-Type: application/json" \
-  -d '{"name": "Test Item", "description": "A test item"}'
-
-# List items
-curl http://localhost:8080/api/v1/items
-```
-
-## Creating a New Service
-
-1. Copy this template (or use GitHub "Use this template")
-2. Run `init.ps1` / `init.sh` with your project parameters
-3. Replace the sample `Item` domain with your actual domain model
-4. Adjust ports, services, and adapters for your use case
-5. Update `openapi.yaml` with your actual API contract
-6. Modify Flyway migrations for your schema
-7. Add/remove infrastructure adapters as needed
-
-## Project Structure
-
-```
-hexagonal-service-template/
-├── build.gradle.kts                 # Root build: Java 21, JUnit Platform
-├── settings.gradle.kts              # Module declarations
-├── gradle/libs.versions.toml        # Centralized dependency versions
-├── docker-compose.yml               # Postgres + Kafka + Kafka UI
-├── application/
-│   ├── build.gradle.kts             # java-library, no Spring Boot
-│   └── src/main/java/.../application/
-│       ├── domain/
-│       │   ├── model/Item.java
-│       │   └── exception/
-│       ├── port/
-│       │   ├── input/ItemService.java
-│       │   └── output/ItemStoragePort.java, ItemEventPublisherPort.java
-│       └── service/ItemServiceImpl.java
-├── infrastructure/
-│   ├── app/
-│   │   ├── build.gradle.kts         # Spring Boot plugin, pulls all modules
-│   │   └── src/main/
-│   │       ├── java/.../Application.java, config/InfrastructureConfig.java
-│   │       └── resources/application.yml
-│   ├── rest-api/
-│   │   ├── build.gradle.kts         # OpenAPI Generator plugin
-│   │   └── src/main/
-│   │       ├── java/.../rest/ItemController.java, advice/, mapper/
-│   │       └── resources/openapi/openapi.yaml, schemas/
-│   ├── jdbc-storage-adapter/
-│   │   ├── build.gradle.kts
-│   │   └── src/main/
-│   │       ├── java/.../entity/, repository/, mapper/, storage/
-│   │       └── resources/db/migrations/
-│   └── event-adapter/
-│       ├── build.gradle.kts
-│       └── src/main/java/.../event/
-│           ├── EventAdapterConfig.java
-│           ├── KafkaItemEventPublisher.java
-│           └── ItemEvent.java
-├── init.ps1                          # PowerShell init script
-└── init.sh                           # Bash init script
-```
-
-## Environment Variables
-
-| Variable | Default | Description |
-|----------|---------|-------------|
-| `APP_DB_URL` | `jdbc:postgresql://localhost:5432/appdb` | Database URL |
-| `APP_DB_USERNAME` | `appuser` | Database username |
-| `APP_DB_PASSWORD` | `apppass` | Database password |
-| `APP_KAFKA_BOOTSTRAP_SERVERS` | `localhost:9092` | Kafka brokers |
-| `APP_KAFKA_TOPIC_ITEM_EVENTS` | `service.item.events.v1` | Kafka topic for item events |
+| Module | Purpose |
+|--------|---------|
+| `application` | Pure domain/application core: models, signal rules, engine, ports |
+| `infrastructure/app` | Spring Boot entrypoint, configuration properties, bean wiring |
+| `infrastructure/event-adapter` | Kafka Avro consumer, event mappers, publisher adapter |

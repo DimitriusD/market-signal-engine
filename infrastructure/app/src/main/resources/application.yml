@@ -5,19 +5,25 @@ management:
         include: "health,info,metrics"
 
 spring:
+  application:
+    name: market-signal-engine
   kafka:
     bootstrap-servers: ${APP_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
-  datasource:
-    url: ${APP_DB_URL:jdbc:postgresql://localhost:5432/appdb}
-    username: ${APP_DB_USERNAME:appuser}
-    password: ${APP_DB_PASSWORD:apppass}
-    driver-class-name: org.postgresql.Driver
-  flyway:
-    enabled: true
-    locations: classpath:db/migrations
-    ignore-migration-patterns: "*:missing,*:future"
 
 app:
   kafka:
-    topic:
-      item-events: ${APP_KAFKA_TOPIC_ITEM_EVENTS:service.item.events.v1}
+    schema-registry-url: ${APP_SCHEMA_REGISTRY_URL:http://localhost:8081}
+    consumer:
+      group-id: ${APP_KAFKA_CONSUMER_GROUP_ID:market-signal-engine}
+    topics:
+      market-features: ${APP_KAFKA_TOPIC_MARKET_FEATURES:state.market.features.v1}
+      market-signals: ${APP_KAFKA_TOPIC_MARKET_SIGNALS:state.market.signals.v1}
+
+  signal:
+    signal-set-version: ${APP_SIGNAL_SET_VERSION:mse-signals-v1}
+    max-spread-bps: ${APP_SIGNAL_MAX_SPREAD_BPS:2.0}
+    buy-signed-trade-flow-5s-threshold: ${APP_SIGNAL_BUY_SIGNED_TRADE_FLOW_5S_THRESHOLD:0.0}
+    sell-signed-trade-flow-5s-threshold: ${APP_SIGNAL_SELL_SIGNED_TRADE_FLOW_5S_THRESHOLD:0.0}
+    buy-book-imbalance-threshold: ${APP_SIGNAL_BUY_BOOK_IMBALANCE_THRESHOLD:0.60}
+    sell-book-imbalance-threshold: ${APP_SIGNAL_SELL_BOOK_IMBALANCE_THRESHOLD:-0.60}
+    max-short-term-volatility-1s: ${APP_SIGNAL_MAX_SHORT_TERM_VOLATILITY_1S:0.01}
