@@ -41,6 +41,22 @@ class QualitySignalRuleTest {
     }
 
     @Test
+    void staleSyncStatusEmitsNoTradeStaleBook() {
+        FeatureQuality quality = FeatureQuality.builder()
+                .syncStatus(SyncStatus.STALE)
+                .staleBbo(false)
+                .staleBook(false)
+                .staleTrades(false)
+                .incompleteBook(false)
+                .build();
+        MarketFeaturesSnapshot features = SignalRuleTestSupport.withQuality(quality);
+
+        List<MarketSignal> signals = rule.evaluate(SignalRuleTestSupport.context(features));
+
+        assertTrue(signals.stream().anyMatch(s -> s.type() == SignalType.NO_TRADE_STALE_BOOK));
+    }
+
+    @Test
     void recoveringBookEmitsNoTradeRecoveringBook() {
         FeatureQuality quality = FeatureQuality.builder()
                 .syncStatus(SyncStatus.RECOVERING)

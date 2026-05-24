@@ -1,7 +1,6 @@
 package com.trading.marketsignalengine.event.mapper;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
-import static org.junit.jupiter.api.Assertions.assertNull;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 
 import com.trading.contracts.common.MetadataEvent;
@@ -17,41 +16,35 @@ import com.trading.marketsignalengine.application.domain.model.SyncStatus;
 import java.math.BigDecimal;
 import org.junit.jupiter.api.Test;
 
-class MarketFeaturesEventMapperTest {
-
-    private final MarketFeaturesEventMapper mapper = new MarketFeaturesEventMapper();
+class MarketFeaturesSnapshotAvroMapperTest {
 
     @Test
-    void nullDecimalStringMapsToNull() {
-        assertNull(mapper.decimal("testField", null));
-    }
+    void invalidDecimalStringThrowsAvroMappingException() {
+        BboFeaturesEvent bbo = BboFeaturesEvent.newBuilder()
+                .setSpreadBps("not-a-number")
+                .build();
 
-    @Test
-    void blankDecimalStringMapsToNull() {
-        assertNull(mapper.decimal("testField", "   "));
-    }
+        MarketFeaturesSnapshotEvent event = validEventBuilder()
+                .setBbo(bbo)
+                .build();
 
-    @Test
-    void validDecimalStringMapsToBigDecimal() {
-        assertEquals(new BigDecimal("1.23"), mapper.decimal("testField", "1.23"));
-    }
-
-    @Test
-    void invalidDecimalStringThrowsException() {
-        assertThrows(IllegalArgumentException.class, () -> mapper.decimal("testField", "not-a-number"));
-    }
-
-    @Test
-    void syncStatusMapsCorrectly() {
-        assertEquals(SyncStatus.IN_SYNC, mapper.mapSyncStatus(BookSyncStatus.IN_SYNC));
-        assertEquals(SyncStatus.RECOVERING, mapper.mapSyncStatus(BookSyncStatus.RECOVERING));
-        assertEquals(SyncStatus.OUT_OF_SYNC, mapper.mapSyncStatus(BookSyncStatus.OUT_OF_SYNC));
-        assertEquals(SyncStatus.STALE, mapper.mapSyncStatus(BookSyncStatus.STALE));
-        assertEquals(SyncStatus.UNKNOWN, mapper.mapSyncStatus(null));
+        assertThrows(AvroMappingException.class, () -> MarketFeaturesSnapshotAvroMapper.toDomain(event));
     }
 
     @Test
     void mapsFullEventToDomain() {
+        MarketFeaturesSnapshotEvent event = validEventBuilder().build();
+
+        var domain = MarketFeaturesSnapshotAvroMapper.toDomain(event);
+
+        assertEquals("evt-1", domain.snapshotId());
+        assertEquals("binance", domain.exchange());
+        assertEquals("BTCUSDT", domain.symbol());
+        assertEquals(new BigDecimal("1.5"), domain.bbo().spreadBps());
+        assertEquals(SyncStatus.IN_SYNC, domain.quality().syncStatus());
+    }
+
+    private static MarketFeaturesSnapshotEvent.Builder validEventBuilder() {
         MetadataEvent metadata = MetadataEvent.newBuilder()
                 .setSchemaVersion(1)
                 .setEventType("MARKET_FEATURES_SNAPSHOT")
@@ -80,7 +73,7 @@ class MarketFeaturesEventMapperTest {
                 .setSpreadBps("1.5")
                 .build();
 
-        MarketFeaturesSnapshotEvent event = MarketFeaturesSnapshotEvent.newBuilder()
+        return MarketFeaturesSnapshotEvent.newBuilder()
                 .setMetadata(metadata)
                 .setComputedTs(1_700_000_000_300L)
                 .setFeatureSetVersion("mfs-core-v1")
@@ -89,15 +82,6 @@ class MarketFeaturesEventMapperTest {
                 .setBbo(bbo)
                 .setBook(BookFeaturesEvent.newBuilder().build())
                 .setTradeFlow(TradeFlowFeaturesEvent.newBuilder().build())
-                .setRegime(ShortTermRegimeFeaturesEvent.newBuilder().build())
-                .build();
-
-        var domain = mapper.toDomain(event);
-
-        assertEquals("evt-1", domain.snapshotId());
-        assertEquals("binance", domain.exchange());
-        assertEquals("BTCUSDT", domain.symbol());
-        assertEquals(new BigDecimal("1.5"), domain.bbo().spreadBps());
-        assertEquals(SyncStatus.IN_SYNC, domain.quality().syncStatus());
+                .setRegime(ShortTermRegimeFeaturesEvent.newBuilder().build());
     }
 }

@@ -4,7 +4,7 @@ Event-driven Kafka Avro service that consumes market feature snapshots and produ
 
 ## What it does
 
-`market-signal-engine` reads normalized market feature snapshots from Kafka, evaluates explainable signal rules in a pure domain/application core, and publishes (or temporarily logs) market signal snapshots.
+`market-signal-engine` reads normalized market feature snapshots from Kafka, evaluates explainable signal rules in a pure domain/application core, and publishes market signal snapshots to Kafka.
 
 ## Input
 
@@ -22,13 +22,11 @@ Event-driven Kafka Avro service that consumes market feature snapshots and produ
 | Key | `instrumentId` |
 | Value | `com.trading.contracts.signal.MarketSignalSnapshotEvent` |
 
-Output publisher is temporarily implemented as `LoggingMarketSignalSnapshotPublisher` until signal Avro contracts are published in `trading-schemas`.
-
 ## Architecture
 
 ```
 market-signal-engine
-    ├── application              # domain models, rules, use cases, ports (no Kafka/Avro/Spring)
+    ├── application              # domain models, rules, handler, ports (no Kafka/Avro/Spring)
     └── infrastructure
         ├── app                  # Spring Boot composition root
         └── event-adapter        # Kafka Avro consumer, mappers, publisher adapter
@@ -41,19 +39,19 @@ state.market.features.v1
     ↓
 MarketFeaturesKafkaConsumer
     ↓
-MarketFeaturesEventMapper
+MarketFeaturesSnapshotAvroMapper
     ↓
 domain MarketFeaturesSnapshot
     ↓
-EvaluateMarketSignalsUseCase
+MarketFeaturesHandler
     ↓
 DefaultMarketSignalEngine
     ↓
 domain MarketSignalSnapshot
     ↓
-LoggingMarketSignalSnapshotPublisher (temporary)
+MarketSignalSnapshotPublisher
     ↓
-state.market.signals.v1 (when Avro contract is available)
+state.market.signals.v1
 ```
 
 ## Local setup
@@ -106,6 +104,6 @@ docker compose up -d
 
 | Module | Purpose |
 |--------|---------|
-| `application` | Pure domain/application core: models, signal rules, engine, ports |
+| `application` | Pure domain/application core: models, signal rules, engine, `MarketFeaturesHandler` |
 | `infrastructure/app` | Spring Boot entrypoint, configuration properties, bean wiring |
-| `infrastructure/event-adapter` | Kafka Avro consumer, event mappers, publisher adapter |
+| `infrastructure/event-adapter` | Kafka Avro consumer, event mappers, `MarketSignalSnapshotPublisher` |

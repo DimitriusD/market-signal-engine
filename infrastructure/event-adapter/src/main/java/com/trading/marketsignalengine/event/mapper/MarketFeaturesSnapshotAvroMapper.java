@@ -16,14 +16,18 @@ import com.trading.marketsignalengine.application.domain.model.SyncStatus;
 import com.trading.marketsignalengine.application.domain.model.TradeFlowFeatureView;
 import java.math.BigDecimal;
 import java.time.Instant;
-import org.springframework.stereotype.Component;
 
-@Component
-public class MarketFeaturesEventMapper {
+public final class MarketFeaturesSnapshotAvroMapper {
 
-    public MarketFeaturesSnapshot toDomain(MarketFeaturesSnapshotEvent event) {
+    private MarketFeaturesSnapshotAvroMapper() {
+    }
+
+    public static MarketFeaturesSnapshot toDomain(MarketFeaturesSnapshotEvent event) {
         if (event == null) {
-            throw new IllegalArgumentException("MarketFeaturesSnapshotEvent must not be null");
+            throw new AvroMappingException("MarketFeaturesSnapshotEvent must not be null");
+        }
+        if (event.getMetadata() == null) {
+            throw new AvroMappingException("metadata is null");
         }
 
         var metadata = event.getMetadata();
@@ -46,7 +50,7 @@ public class MarketFeaturesEventMapper {
                 .build();
     }
 
-    private FeatureQuality mapQuality(FeatureQualityEvent quality) {
+    private static FeatureQuality mapQuality(FeatureQualityEvent quality) {
         if (quality == null) {
             return null;
         }
@@ -62,7 +66,7 @@ public class MarketFeaturesEventMapper {
                 .build();
     }
 
-    private BboFeatureView mapBbo(BboFeaturesEvent bbo) {
+    private static BboFeatureView mapBbo(BboFeaturesEvent bbo) {
         if (bbo == null) {
             return null;
         }
@@ -79,7 +83,7 @@ public class MarketFeaturesEventMapper {
                 .build();
     }
 
-    private BookFeatureView mapBook(BookFeaturesEvent book) {
+    private static BookFeatureView mapBook(BookFeaturesEvent book) {
         if (book == null) {
             return null;
         }
@@ -94,7 +98,7 @@ public class MarketFeaturesEventMapper {
                 .build();
     }
 
-    private TradeFlowFeatureView mapTradeFlow(TradeFlowFeaturesEvent tradeFlow) {
+    private static TradeFlowFeatureView mapTradeFlow(TradeFlowFeaturesEvent tradeFlow) {
         if (tradeFlow == null) {
             return null;
         }
@@ -109,7 +113,7 @@ public class MarketFeaturesEventMapper {
                 .build();
     }
 
-    private RegimeFeatureView mapRegime(ShortTermRegimeFeaturesEvent regime) {
+    private static RegimeFeatureView mapRegime(ShortTermRegimeFeaturesEvent regime) {
         if (regime == null) {
             return null;
         }
@@ -121,7 +125,7 @@ public class MarketFeaturesEventMapper {
                 .build();
     }
 
-    BigDecimal decimal(String fieldName, CharSequence value) {
+    private static BigDecimal decimal(String fieldName, CharSequence value) {
         if (value == null) {
             return null;
         }
@@ -132,15 +136,15 @@ public class MarketFeaturesEventMapper {
         try {
             return new BigDecimal(text.trim());
         } catch (NumberFormatException ex) {
-            throw new IllegalArgumentException("Invalid decimal value for " + fieldName + ": " + text, ex);
+            throw new AvroMappingException("Invalid decimal value for " + fieldName + ": " + text, ex);
         }
     }
 
-    Instant instantFromEpochMillis(long value) {
+    private static Instant instantFromEpochMillis(long value) {
         return Instant.ofEpochMilli(value);
     }
 
-    SyncStatus mapSyncStatus(BookSyncStatus syncStatus) {
+    private static SyncStatus mapSyncStatus(BookSyncStatus syncStatus) {
         if (syncStatus == null) {
             return SyncStatus.UNKNOWN;
         }

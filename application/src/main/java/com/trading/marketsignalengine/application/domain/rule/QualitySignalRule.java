@@ -59,6 +59,15 @@ public class QualitySignalRule implements SignalRule {
                     null));
         }
 
+        if (syncStatus == SyncStatus.STALE) {
+            signals.add(MarketSignal.riskOff(
+                    SignalType.NO_TRADE_STALE_BOOK,
+                    SignalStrength.STRONG,
+                    BigDecimal.ONE,
+                    "Order book sync status is stale",
+                    null));
+        }
+
         if (quality.staleBbo()) {
             signals.add(MarketSignal.riskOff(
                     SignalType.NO_TRADE_STALE_BBO,

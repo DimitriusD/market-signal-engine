@@ -1,29 +1,42 @@
 package com.trading.marketsignalengine.config;
 
-import com.trading.marketsignalengine.application.domain.rule.CompositeSignalRule;
-import com.trading.marketsignalengine.application.domain.rule.DefaultCompositeSignalRule;
-import com.trading.marketsignalengine.application.domain.rule.OrderBookSignalRule;
-import com.trading.marketsignalengine.application.domain.rule.QualitySignalRule;
-import com.trading.marketsignalengine.application.domain.rule.RegimeSignalRule;
-import com.trading.marketsignalengine.application.domain.rule.SignalRule;
-import com.trading.marketsignalengine.application.domain.rule.SpreadSignalRule;
-import com.trading.marketsignalengine.application.domain.rule.TradeFlowSignalRule;
-import com.trading.marketsignalengine.application.domain.rule.VolatilitySignalRule;
+import com.trading.marketsignalengine.application.domain.model.SignalConfiguration;
+import com.trading.marketsignalengine.application.domain.rule.*;
 import com.trading.marketsignalengine.application.domain.service.DefaultMarketSignalEngine;
 import com.trading.marketsignalengine.application.domain.service.MarketSignalEngine;
 import com.trading.marketsignalengine.application.domain.service.SignalAggregator;
-import com.trading.marketsignalengine.application.port.input.EvaluateMarketSignalsUseCase;
+import com.trading.marketsignalengine.application.port.input.MarketFeaturesHandler;
 import com.trading.marketsignalengine.application.port.output.MarketSignalSnapshotPublisherPort;
-import com.trading.marketsignalengine.application.port.output.SignalConfigurationProviderPort;
-import com.trading.marketsignalengine.application.service.MarketSignalEvaluationService;
-import java.util.List;
+import com.trading.marketsignalengine.application.service.MarketSignalHandleService;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
+import java.math.BigDecimal;
+import java.time.Clock;
+import java.util.List;
+
 @Configuration
 @EnableConfigurationProperties(SignalProperties.class)
 public class InfrastructureConfig {
+
+    @Bean
+    public Clock clock() {
+        return Clock.systemUTC();
+    }
+
+    @Bean
+    public SignalConfiguration signalConfiguration(SignalProperties properties) {
+        return SignalConfiguration.builder()
+                .signalSetVersion(defaultString(properties.getSignalSetVersion(), "mse-signals-v1"))
+                .maxSpreadBps(defaultDecimal(properties.getMaxSpreadBps(), "2.0"))
+                .buySignedTradeFlow5sThreshold(defaultDecimal(properties.getBuySignedTradeFlow5sThreshold(), "0.0"))
+                .sellSignedTradeFlow5sThreshold(defaultDecimal(properties.getSellSignedTradeFlow5sThreshold(), "0.0"))
+                .buyBookImbalanceThreshold(defaultDecimal(properties.getBuyBookImbalanceThreshold(), "0.60"))
+                .sellBookImbalanceThreshold(defaultDecimal(properties.getSellBookImbalanceThreshold(), "-0.60"))
+                .maxShortTermVolatility1s(defaultDecimal(properties.getMaxShortTermVolatility1s(), "0.01"))
+                .build();
+    }
 
     @Bean
     public QualitySignalRule qualitySignalRule() {
@@ -86,10 +99,25 @@ public class InfrastructureConfig {
     }
 
     @Bean
-    public EvaluateMarketSignalsUseCase evaluateMarketSignalsUseCase(
+    public MarketSignalHandleService marketSignalEvaluationService(
             MarketSignalEngine marketSignalEngine,
-            SignalConfigurationProviderPort configurationProvider,
-            MarketSignalSnapshotPublisherPort publisher) {
-        return new MarketSignalEvaluationService(marketSignalEngine, configurationProvider, publisher);
+            SignalConfiguration signalConfiguration,
+            MarketSignalSnapshotPublisherPort publisher,
+            Clock clock) {
+        return new MarketSignalHandleService(marketSignalEngine, signalConfiguration, publisher, clock);
+    }
+
+    @Bean
+    public MarketFeaturesHandler marketFeatureHandler(
+            MarketSignalHandleService marketSignalHandleService) {
+        return marketSignalHandleService;
+    }
+
+    private static String defaultString(String value, String fallback) {
+        return value == null || value.isBlank() ? fallback : value;
+    }
+
+    private static BigDecimal defaultDecimal(BigDecimal value, String fallback) {
+        return value == null ? new BigDecimal(fallback) : value;
     }
 }

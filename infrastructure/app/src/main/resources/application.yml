@@ -9,13 +9,17 @@ spring:
     name: market-signal-engine
   kafka:
     bootstrap-servers: ${APP_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
+    consumer:
+      group-id: ${APP_KAFKA_CONSUMER_GROUP_ID:market-signal-engine}
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
 
 app:
   kafka:
-    schema-registry-url: ${APP_SCHEMA_REGISTRY_URL:http://localhost:8081}
-    consumer:
-      group-id: ${APP_KAFKA_CONSUMER_GROUP_ID:market-signal-engine}
-    topics:
+    schema-registry:
+      url: ${APP_SCHEMA_REGISTRY_URL:http://localhost:8081}
+    topic:
       market-features: ${APP_KAFKA_TOPIC_MARKET_FEATURES:state.market.features.v1}
       market-signals: ${APP_KAFKA_TOPIC_MARKET_SIGNALS:state.market.signals.v1}
 
