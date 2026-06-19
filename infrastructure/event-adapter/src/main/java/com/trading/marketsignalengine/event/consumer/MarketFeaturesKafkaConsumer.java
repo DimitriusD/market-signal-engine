@@ -1,7 +1,7 @@
 package com.trading.marketsignalengine.event.consumer;
 
 import com.trading.contracts.feature.MarketFeaturesSnapshotEvent;
-import com.trading.marketsignalengine.application.domain.model.MarketFeaturesSnapshot;
+import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.port.input.MarketFeaturesHandler;
 import com.trading.marketsignalengine.event.mapper.MarketFeaturesSnapshotAvroMapper;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -13,8 +13,8 @@ public class MarketFeaturesKafkaConsumer {
 
     private final MarketFeaturesHandler marketFeaturesHandler;
 
-    public MarketFeaturesKafkaConsumer(MarketFeaturesHandler marketFeaturesHandler) {
-        this.marketFeaturesHandler = marketFeaturesHandler;
+    public MarketFeaturesKafkaConsumer(MarketFeaturesHandler marketFeatureHandler) {
+        this.marketFeaturesHandler = marketFeatureHandler;
     }
 
     @KafkaListener(

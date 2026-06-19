@@ -1,7 +1,7 @@
 package com.trading.marketsignalengine.application.domain.service;
 
 import com.trading.marketsignalengine.application.domain.model.MarketBias;
-import com.trading.marketsignalengine.application.domain.model.MarketFeaturesSnapshot;
+import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.MarketSignal;
 import com.trading.marketsignalengine.application.domain.model.MarketSignalSnapshot;
 import com.trading.marketsignalengine.application.domain.model.RiskLevel;

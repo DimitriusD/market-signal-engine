@@ -1,12 +1,12 @@
 package com.trading.marketsignalengine.application.domain.rule;
 
-import com.trading.marketsignalengine.application.domain.model.MarketFeaturesSnapshot;
+import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.MarketSignal;
 import com.trading.marketsignalengine.application.domain.model.SignalConfiguration;
 import com.trading.marketsignalengine.application.domain.model.SignalEvaluationContext;
 import com.trading.marketsignalengine.application.domain.model.SignalStrength;
 import com.trading.marketsignalengine.application.domain.model.SignalType;
-import com.trading.marketsignalengine.application.domain.model.TradeFlowFeatureView;
+import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowFeature;
 import java.math.BigDecimal;
 import java.util.List;
 import java.util.Map;
@@ -17,7 +17,7 @@ public class TradeFlowSignalRule implements SignalRule {
     public List<MarketSignal> evaluate(SignalEvaluationContext context) {
         MarketFeaturesSnapshot features = context.features();
         SignalConfiguration config = context.configuration();
-        TradeFlowFeatureView tradeFlow = features.tradeFlow();
+        TradeFlowFeature tradeFlow = features.tradeFlow();
 
         if (tradeFlow == null || tradeFlow.signedTradeFlow5s() == null) {
             return List.of(MarketSignal.neutral(

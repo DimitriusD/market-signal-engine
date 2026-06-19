@@ -3,8 +3,8 @@ package com.trading.marketsignalengine.application.domain.rule;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.trading.marketsignalengine.application.domain.model.FeatureQuality;
-import com.trading.marketsignalengine.application.domain.model.MarketFeaturesSnapshot;
+import com.trading.marketsignalengine.application.domain.model.feature.FeatureQuality;
+import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.MarketSignal;
 import com.trading.marketsignalengine.application.domain.model.SignalType;
 import com.trading.marketsignalengine.application.domain.model.SyncStatus;

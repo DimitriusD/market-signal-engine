@@ -1,8 +1,8 @@
 package com.trading.marketsignalengine.application.domain.rule;
 
-import com.trading.marketsignalengine.application.domain.model.MarketFeaturesSnapshot;
+import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.MarketSignal;
-import com.trading.marketsignalengine.application.domain.model.RegimeFeatureView;
+import com.trading.marketsignalengine.application.domain.model.feature.RegimeFeature;
 import com.trading.marketsignalengine.application.domain.model.SignalEvaluationContext;
 import com.trading.marketsignalengine.application.domain.model.SignalStrength;
 import com.trading.marketsignalengine.application.domain.model.SignalType;
@@ -14,7 +14,7 @@ public class RegimeSignalRule implements SignalRule {
     @Override
     public List<MarketSignal> evaluate(SignalEvaluationContext context) {
         MarketFeaturesSnapshot features = context.features();
-        RegimeFeatureView regime = features.regime();
+        RegimeFeature regime = features.regime();
 
         if (regime == null || regime.lastTradeDistanceToMidBps() == null
                 || regime.lastTradeDistanceToMidBps().compareTo(BigDecimal.ZERO) == 0) {

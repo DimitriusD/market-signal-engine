@@ -13,17 +13,11 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.math.BigDecimal;
-import java.time.Clock;
 import java.util.List;
 
 @Configuration
 @EnableConfigurationProperties(SignalProperties.class)
 public class InfrastructureConfig {
-
-    @Bean
-    public Clock clock() {
-        return Clock.systemUTC();
-    }
 
     @Bean
     public SignalConfiguration signalConfiguration(SignalProperties properties) {
@@ -87,7 +81,8 @@ public class InfrastructureConfig {
             VolatilitySignalRule volatilitySignalRule,
             RegimeSignalRule regimeSignalRule,
             CompositeSignalRule compositeSignalRule,
-            SignalAggregator signalAggregator) {
+            SignalAggregator signalAggregator,
+            SignalConfiguration signalConfiguration) {
         List<SignalRule> baseRules = List.of(
                 qualitySignalRule,
                 spreadSignalRule,
@@ -95,22 +90,18 @@ public class InfrastructureConfig {
                 orderBookSignalRule,
                 volatilitySignalRule,
                 regimeSignalRule);
-        return new DefaultMarketSignalEngine(baseRules, compositeSignalRule, signalAggregator);
-    }
-
-    @Bean
-    public MarketSignalHandleService marketSignalEvaluationService(
-            MarketSignalEngine marketSignalEngine,
-            SignalConfiguration signalConfiguration,
-            MarketSignalSnapshotPublisherPort publisher,
-            Clock clock) {
-        return new MarketSignalHandleService(marketSignalEngine, signalConfiguration, publisher, clock);
+        return new DefaultMarketSignalEngine(
+                baseRules,
+                compositeSignalRule,
+                signalAggregator,
+                signalConfiguration);
     }
 
     @Bean
     public MarketFeaturesHandler marketFeatureHandler(
-            MarketSignalHandleService marketSignalHandleService) {
-        return marketSignalHandleService;
+            MarketSignalEngine marketSignalEngine,
+            MarketSignalSnapshotPublisherPort publisher) {
+        return new MarketSignalHandleService(marketSignalEngine, publisher);
     }
 
     private static String defaultString(String value, String fallback) {

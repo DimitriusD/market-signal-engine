@@ -1,5 +1,6 @@
-package com.trading.marketsignalengine.application.domain.model;
+package com.trading.marketsignalengine.application.domain.model.feature;
 
+import com.trading.marketsignalengine.application.domain.model.SyncStatus;
 import lombok.Builder;
 
 @Builder

@@ -1,8 +1,8 @@
 package com.trading.marketsignalengine.application.domain.rule;
 
-import com.trading.marketsignalengine.application.domain.model.MarketFeaturesSnapshot;
+import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.MarketSignal;
-import com.trading.marketsignalengine.application.domain.model.RegimeFeatureView;
+import com.trading.marketsignalengine.application.domain.model.feature.RegimeFeature;
 import com.trading.marketsignalengine.application.domain.model.SignalConfiguration;
 import com.trading.marketsignalengine.application.domain.model.SignalEvaluationContext;
 import com.trading.marketsignalengine.application.domain.model.SignalStrength;
@@ -16,7 +16,7 @@ public class VolatilitySignalRule implements SignalRule {
     public List<MarketSignal> evaluate(SignalEvaluationContext context) {
         MarketFeaturesSnapshot features = context.features();
         SignalConfiguration config = context.configuration();
-        RegimeFeatureView regime = features.regime();
+        RegimeFeature regime = features.regime();
 
         if (regime == null || regime.shortTermVolatility1s() == null) {
             return List.of(MarketSignal.neutral(

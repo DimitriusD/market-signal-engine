@@ -1,6 +1,7 @@
-package com.trading.marketsignalengine.application.domain.model;
+package com.trading.marketsignalengine.application.domain.model.feature;
 
 import java.time.Instant;
+
 import lombok.Builder;
 
 @Builder
@@ -14,9 +15,9 @@ public record MarketFeaturesSnapshot(
         Instant receivedAt,
         Instant computedAt,
         String featureSetVersion,
-        BboFeatureView bbo,
-        BookFeatureView book,
-        TradeFlowFeatureView tradeFlow,
-        RegimeFeatureView regime,
+        BboFeature bbo,
+        BookFeature book,
+        TradeFlowFeature tradeFlow,
+        RegimeFeature regime,
         FeatureQuality quality) {
 }

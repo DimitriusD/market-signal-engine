@@ -2,10 +2,10 @@ package com.trading.marketsignalengine.application.domain.rule;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import com.trading.marketsignalengine.application.domain.model.MarketFeaturesSnapshot;
+import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.MarketSignal;
 import com.trading.marketsignalengine.application.domain.model.SignalType;
-import com.trading.marketsignalengine.application.domain.model.TradeFlowFeatureView;
+import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowFeature;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -62,7 +62,7 @@ class TradeFlowSignalRuleTest {
                 .receivedAt(Instant.parse("2026-01-01T00:00:00Z"))
                 .computedAt(Instant.parse("2026-01-01T00:00:00Z"))
                 .featureSetVersion("mfs-core-v1")
-                .tradeFlow(TradeFlowFeatureView.builder().signedTradeFlow5s(signedTradeFlow5s).build())
+                .tradeFlow(TradeFlowFeature.builder().signedTradeFlow5s(signedTradeFlow5s).build())
                 .build();
     }
 }

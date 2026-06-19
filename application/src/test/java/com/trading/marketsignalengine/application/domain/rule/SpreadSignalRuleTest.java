@@ -2,8 +2,8 @@ package com.trading.marketsignalengine.application.domain.rule;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
-import com.trading.marketsignalengine.application.domain.model.BboFeatureView;
-import com.trading.marketsignalengine.application.domain.model.MarketFeaturesSnapshot;
+import com.trading.marketsignalengine.application.domain.model.feature.BboFeature;
+import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.MarketSignal;
 import com.trading.marketsignalengine.application.domain.model.SignalType;
 import java.math.BigDecimal;
@@ -53,7 +53,7 @@ class SpreadSignalRuleTest {
                 .receivedAt(Instant.parse("2026-01-01T00:00:00Z"))
                 .computedAt(Instant.parse("2026-01-01T00:00:00Z"))
                 .featureSetVersion("mfs-core-v1")
-                .bbo(BboFeatureView.builder().spreadBps(spreadBps).build())
+                .bbo(BboFeature.builder().spreadBps(spreadBps).build())
                 .build();
     }
 }

@@ -7,13 +7,13 @@ import com.trading.contracts.feature.MarketFeaturesSnapshotEvent;
 import com.trading.contracts.feature.ShortTermRegimeFeaturesEvent;
 import com.trading.contracts.feature.TradeFlowFeaturesEvent;
 import com.trading.contracts.orderbook.BookSyncStatus;
-import com.trading.marketsignalengine.application.domain.model.BboFeatureView;
-import com.trading.marketsignalengine.application.domain.model.BookFeatureView;
-import com.trading.marketsignalengine.application.domain.model.FeatureQuality;
-import com.trading.marketsignalengine.application.domain.model.MarketFeaturesSnapshot;
-import com.trading.marketsignalengine.application.domain.model.RegimeFeatureView;
+import com.trading.marketsignalengine.application.domain.model.feature.BboFeature;
+import com.trading.marketsignalengine.application.domain.model.feature.BookFeature;
+import com.trading.marketsignalengine.application.domain.model.feature.FeatureQuality;
+import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
+import com.trading.marketsignalengine.application.domain.model.feature.RegimeFeature;
 import com.trading.marketsignalengine.application.domain.model.SyncStatus;
-import com.trading.marketsignalengine.application.domain.model.TradeFlowFeatureView;
+import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowFeature;
 import java.math.BigDecimal;
 import java.time.Instant;
 
@@ -66,11 +66,11 @@ public final class MarketFeaturesSnapshotAvroMapper {
                 .build();
     }
 
-    private static BboFeatureView mapBbo(BboFeaturesEvent bbo) {
+    private static BboFeature mapBbo(BboFeaturesEvent bbo) {
         if (bbo == null) {
             return null;
         }
-        return BboFeatureView.builder()
+        return BboFeature.builder()
                 .bestBidPrice(decimal("bbo.bestBidPrice", bbo.getBestBidPrice()))
                 .bestAskPrice(decimal("bbo.bestAskPrice", bbo.getBestAskPrice()))
                 .bestBidQty(decimal("bbo.bestBidQty", bbo.getBestBidQty()))
@@ -83,11 +83,11 @@ public final class MarketFeaturesSnapshotAvroMapper {
                 .build();
     }
 
-    private static BookFeatureView mapBook(BookFeaturesEvent book) {
+    private static BookFeature mapBook(BookFeaturesEvent book) {
         if (book == null) {
             return null;
         }
-        return BookFeatureView.builder()
+        return BookFeature.builder()
                 .levelsUsed(book.getLevelsUsed())
                 .bidLiquidityTop5(decimal("book.bidLiquidityTop5", book.getBidLiquidityTop5()))
                 .askLiquidityTop5(decimal("book.askLiquidityTop5", book.getAskLiquidityTop5()))
@@ -98,11 +98,11 @@ public final class MarketFeaturesSnapshotAvroMapper {
                 .build();
     }
 
-    private static TradeFlowFeatureView mapTradeFlow(TradeFlowFeaturesEvent tradeFlow) {
+    private static TradeFlowFeature mapTradeFlow(TradeFlowFeaturesEvent tradeFlow) {
         if (tradeFlow == null) {
             return null;
         }
-        return TradeFlowFeatureView.builder()
+        return TradeFlowFeature.builder()
                 .lastTradePrice(decimal("tradeFlow.lastTradePrice", tradeFlow.getLastTradePrice()))
                 .signedTradeFlow1s(decimal("tradeFlow.signedTradeFlow1s", tradeFlow.getSignedTradeFlow1s()))
                 .signedTradeFlow5s(decimal("tradeFlow.signedTradeFlow5s", tradeFlow.getSignedTradeFlow5s()))
@@ -113,11 +113,11 @@ public final class MarketFeaturesSnapshotAvroMapper {
                 .build();
     }
 
-    private static RegimeFeatureView mapRegime(ShortTermRegimeFeaturesEvent regime) {
+    private static RegimeFeature mapRegime(ShortTermRegimeFeaturesEvent regime) {
         if (regime == null) {
             return null;
         }
-        return RegimeFeatureView.builder()
+        return RegimeFeature.builder()
                 .lastTradeDistanceToMidBps(
                         decimal("regime.lastTradeDistanceToMidBps", regime.getLastTradeDistanceToMidBps()))
                 .shortTermVolatility1s(

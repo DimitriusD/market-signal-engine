@@ -1,7 +1,7 @@
 package com.trading.marketsignalengine.application.domain.rule;
 
-import com.trading.marketsignalengine.application.domain.model.BookFeatureView;
-import com.trading.marketsignalengine.application.domain.model.MarketFeaturesSnapshot;
+import com.trading.marketsignalengine.application.domain.model.feature.BookFeature;
+import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.MarketSignal;
 import com.trading.marketsignalengine.application.domain.model.SignalConfiguration;
 import com.trading.marketsignalengine.application.domain.model.SignalEvaluationContext;
@@ -16,7 +16,7 @@ public class OrderBookSignalRule implements SignalRule {
     public List<MarketSignal> evaluate(SignalEvaluationContext context) {
         MarketFeaturesSnapshot features = context.features();
         SignalConfiguration config = context.configuration();
-        BookFeatureView book = features.book();
+        BookFeature book = features.book();
 
         if (book == null || book.top5Imbalance() == null) {
             return List.of(MarketSignal.neutral(

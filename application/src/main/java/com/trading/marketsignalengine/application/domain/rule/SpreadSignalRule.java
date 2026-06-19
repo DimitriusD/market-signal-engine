@@ -1,7 +1,7 @@
 package com.trading.marketsignalengine.application.domain.rule;
 
-import com.trading.marketsignalengine.application.domain.model.BboFeatureView;
-import com.trading.marketsignalengine.application.domain.model.MarketFeaturesSnapshot;
+import com.trading.marketsignalengine.application.domain.model.feature.BboFeature;
+import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.MarketSignal;
 import com.trading.marketsignalengine.application.domain.model.SignalConfiguration;
 import com.trading.marketsignalengine.application.domain.model.SignalEvaluationContext;
@@ -16,7 +16,7 @@ public class SpreadSignalRule implements SignalRule {
     public List<MarketSignal> evaluate(SignalEvaluationContext context) {
         MarketFeaturesSnapshot features = context.features();
         SignalConfiguration config = context.configuration();
-        BboFeatureView bbo = features.bbo();
+        BboFeature bbo = features.bbo();
 
         if (bbo == null || bbo.spreadBps() == null) {
             return List.of(MarketSignal.riskOff(

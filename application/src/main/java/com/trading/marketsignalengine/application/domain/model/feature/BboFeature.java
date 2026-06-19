@@ -1,10 +1,10 @@
-package com.trading.marketsignalengine.application.domain.model;
+package com.trading.marketsignalengine.application.domain.model.feature;
 
 import java.math.BigDecimal;
 import lombok.Builder;
 
 @Builder
-public record BboFeatureView(
+public record BboFeature(
         BigDecimal bestBidPrice,
         BigDecimal bestAskPrice,
         BigDecimal bestBidQty,
