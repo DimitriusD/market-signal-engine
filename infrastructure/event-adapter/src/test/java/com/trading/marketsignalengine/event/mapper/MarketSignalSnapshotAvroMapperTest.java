@@ -24,6 +24,8 @@ class MarketSignalSnapshotAvroMapperTest {
                 "feat-1",
                 "binance",
                 "spot",
+                "BTC",
+                "USDT",
                 "BTCUSDT",
                 "binance:spot:BTCUSDT",
                 eventTime,
@@ -44,6 +46,9 @@ class MarketSignalSnapshotAvroMapperTest {
 
         assertEquals("MARKET_SIGNAL_SNAPSHOT", event.getMetadata().getEventType());
         assertEquals("sig-1", event.getMetadata().getEventId());
+        assertEquals("BTC", event.getMetadata().getBase());
+        assertEquals("USDT", event.getMetadata().getQuote());
+        assertEquals("BTCUSDT", event.getMetadata().getSymbol());
         assertEquals("binance:spot:BTCUSDT", event.getMetadata().getInstrumentId());
         assertEquals("feat-1", event.getSourceFeatureEventId());
         assertEquals("mfs-core-v1", event.getSourceFeatureSetVersion());

@@ -83,15 +83,18 @@ public class InfrastructureConfig {
             CompositeSignalRule compositeSignalRule,
             SignalAggregator signalAggregator,
             SignalConfiguration signalConfiguration) {
-        List<SignalRule> baseRules = List.of(
-                qualitySignalRule,
+        List<SignalRule> qualityGateRules = List.of(qualitySignalRule);
+        List<SignalRule> tradabilityGateRules = List.of(
                 spreadSignalRule,
+                volatilitySignalRule);
+        List<SignalRule> directionalRules = List.of(
                 tradeFlowSignalRule,
                 orderBookSignalRule,
-                volatilitySignalRule,
                 regimeSignalRule);
         return new DefaultMarketSignalEngine(
-                baseRules,
+                qualityGateRules,
+                tradabilityGateRules,
+                directionalRules,
                 compositeSignalRule,
                 signalAggregator,
                 signalConfiguration);

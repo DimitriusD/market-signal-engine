@@ -36,6 +36,8 @@ public final class MarketFeaturesSnapshotAvroMapper {
                 .snapshotId(metadata.getEventId())
                 .exchange(metadata.getExchange())
                 .marketType(metadata.getMarketType())
+                .base(metadata.getBase())
+                .quote(metadata.getQuote())
                 .symbol(metadata.getSymbol())
                 .instrumentId(metadata.getInstrumentId())
                 .eventTime(instantFromEpochMillis(metadata.getExchangeTs()))
@@ -56,12 +58,10 @@ public final class MarketFeaturesSnapshotAvroMapper {
         }
         return FeatureQuality.builder()
                 .syncStatus(mapSyncStatus(quality.getSyncStatus()))
-                .staleBbo(quality.getStaleBbo())
-                .staleBook(quality.getStaleBook())
+                .staleOrderBookState(quality.getStaleOrderBookState())
                 .staleTrades(quality.getStaleTrades())
                 .incompleteBook(quality.getIncompleteBook())
-                .bboAgeMs(quality.getBboAgeMs())
-                .bookAgeMs(quality.getBookAgeMs())
+                .orderBookStateAgeMs(quality.getOrderBookStateAgeMs())
                 .tradeAgeMs(quality.getTradeAgeMs())
                 .build();
     }
@@ -150,9 +150,12 @@ public final class MarketFeaturesSnapshotAvroMapper {
         }
         return switch (syncStatus) {
             case IN_SYNC -> SyncStatus.IN_SYNC;
-            case RECOVERING -> SyncStatus.RECOVERING;
+            // DEGRADED has no dedicated domain state; treat it as RECOVERING so the
+            // quality gate routes it to a risk-off NO_TRADE_RECOVERING_BOOK signal.
+            case RECOVERING, DEGRADED -> SyncStatus.RECOVERING;
             case OUT_OF_SYNC -> SyncStatus.OUT_OF_SYNC;
             case STALE -> SyncStatus.STALE;
+            case UNKNOWN -> SyncStatus.UNKNOWN;
         };
     }
 }

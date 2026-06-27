@@ -22,10 +22,21 @@ public final class SignalRuleTestSupport {
     }
 
     public static MarketFeaturesSnapshot defaultFeatures() {
+        return tradableFeaturesBuilder().build();
+    }
+
+    /**
+     * A fully populated, tradable snapshot whose directional features would produce BUY_PRESSURE,
+     * ORDER_BOOK_BULLISH, SPREAD_ACCEPTABLE, VOLATILITY_NORMAL and REGIME_TRENDING_UP. Callers
+     * override individual features (quality, bbo, regime, ...) to build gate scenarios.
+     */
+    public static MarketFeaturesSnapshot.MarketFeaturesSnapshotBuilder tradableFeaturesBuilder() {
         return MarketFeaturesSnapshot.builder()
                 .snapshotId("snap-1")
                 .exchange("binance")
                 .marketType("spot")
+                .base("BTC")
+                .quote("USDT")
                 .symbol("BTCUSDT")
                 .instrumentId("binance:spot:BTCUSDT")
                 .eventTime(Instant.parse("2026-01-01T00:00:00Z"))
@@ -39,8 +50,7 @@ public final class SignalRuleTestSupport {
                 .regime(RegimeFeature.builder()
                         .shortTermVolatility1s(new BigDecimal("0.005"))
                         .lastTradeDistanceToMidBps(new BigDecimal("1.0"))
-                        .build())
-                .build();
+                        .build());
     }
 
     public static MarketFeaturesSnapshot withQuality(FeatureQuality quality) {
@@ -48,6 +58,8 @@ public final class SignalRuleTestSupport {
                 .snapshotId("snap-1")
                 .exchange("binance")
                 .marketType("spot")
+                .base("BTC")
+                .quote("USDT")
                 .symbol("BTCUSDT")
                 .instrumentId("binance:spot:BTCUSDT")
                 .eventTime(Instant.parse("2026-01-01T00:00:00Z"))
@@ -61,8 +73,7 @@ public final class SignalRuleTestSupport {
     public static FeatureQuality tradableQuality() {
         return FeatureQuality.builder()
                 .syncStatus(SyncStatus.IN_SYNC)
-                .staleBbo(false)
-                .staleBook(false)
+                .staleOrderBookState(false)
                 .staleTrades(false)
                 .incompleteBook(false)
                 .build();

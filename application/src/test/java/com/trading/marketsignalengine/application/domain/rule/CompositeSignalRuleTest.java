@@ -1,10 +1,8 @@
 package com.trading.marketsignalengine.application.domain.rule;
 
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.trading.marketsignalengine.application.domain.model.MarketSignal;
-import com.trading.marketsignalengine.application.domain.model.SignalDirection;
 import com.trading.marketsignalengine.application.domain.model.SignalEvaluationContext;
 import com.trading.marketsignalengine.application.domain.model.SignalStrength;
 import com.trading.marketsignalengine.application.domain.model.SignalType;
@@ -41,18 +39,8 @@ class CompositeSignalRuleTest {
     }
 
     @Test
-    void staleSignalEmitsNoTradeCondition() {
-        List<MarketSignal> existing = List.of(
-                MarketSignal.riskOff(SignalType.NO_TRADE_STALE_BBO, SignalStrength.STRONG, BigDecimal.ONE, "stale", null),
-                MarketSignal.neutral(SignalType.SPREAD_ACCEPTABLE, SignalStrength.NONE, BigDecimal.ONE, "spread", null));
-
-        List<MarketSignal> signals = rule.evaluate(dummyContext(), existing);
-
-        assertEquals(SignalType.NO_TRADE_CONDITION, signals.getFirst().type());
-    }
-
-    @Test
-    void conflictingDirectionalSignalsEmitMarketMixed() {
+    void conflictingDirectionalSignalsDoNotEmitMarketMixed() {
+        // MARKET_MIXED is now derived by SignalAggregator from the directional reduction, not here.
         List<MarketSignal> existing = List.of(
                 MarketSignal.bullish(SignalType.BUY_PRESSURE, SignalStrength.STRONG, BigDecimal.ONE, "buy", null),
                 MarketSignal.bearish(SignalType.SELL_PRESSURE, SignalStrength.STRONG, BigDecimal.ONE, "sell", null),
@@ -60,7 +48,7 @@ class CompositeSignalRuleTest {
 
         List<MarketSignal> signals = rule.evaluate(dummyContext(), existing);
 
-        assertTrue(signals.stream().anyMatch(s -> s.type() == SignalType.MARKET_MIXED));
+        assertTrue(signals.stream().noneMatch(s -> s.type() == SignalType.MARKET_MIXED));
     }
 
     private SignalEvaluationContext dummyContext() {

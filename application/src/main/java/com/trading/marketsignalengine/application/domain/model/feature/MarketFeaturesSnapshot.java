@@ -9,6 +9,8 @@ public record MarketFeaturesSnapshot(
         String snapshotId,
         String exchange,
         String marketType,
+        String base,
+        String quote,
         String symbol,
         String instrumentId,
         Instant eventTime,

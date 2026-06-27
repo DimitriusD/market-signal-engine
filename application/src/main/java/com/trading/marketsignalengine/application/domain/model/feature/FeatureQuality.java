@@ -6,18 +6,15 @@ import lombok.Builder;
 @Builder
 public record FeatureQuality(
         SyncStatus syncStatus,
-        boolean staleBbo,
-        boolean staleBook,
+        boolean staleOrderBookState,
         boolean staleTrades,
         boolean incompleteBook,
-        Long bboAgeMs,
-        Long bookAgeMs,
+        Long orderBookStateAgeMs,
         Long tradeAgeMs) {
 
     public boolean isTradable() {
         return syncStatus == SyncStatus.IN_SYNC
-                && !staleBbo
-                && !staleBook
+                && !staleOrderBookState
                 && !staleTrades
                 && !incompleteBook;
     }

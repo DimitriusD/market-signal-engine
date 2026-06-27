@@ -28,8 +28,7 @@ class QualitySignalRuleTest {
     void outOfSyncQualityEmitsNoTradeOutOfSync() {
         FeatureQuality quality = FeatureQuality.builder()
                 .syncStatus(SyncStatus.OUT_OF_SYNC)
-                .staleBbo(false)
-                .staleBook(false)
+                .staleOrderBookState(false)
                 .staleTrades(false)
                 .incompleteBook(false)
                 .build();
@@ -44,8 +43,7 @@ class QualitySignalRuleTest {
     void staleSyncStatusEmitsNoTradeStaleBook() {
         FeatureQuality quality = FeatureQuality.builder()
                 .syncStatus(SyncStatus.STALE)
-                .staleBbo(false)
-                .staleBook(false)
+                .staleOrderBookState(false)
                 .staleTrades(false)
                 .incompleteBook(false)
                 .build();
@@ -60,8 +58,7 @@ class QualitySignalRuleTest {
     void recoveringBookEmitsNoTradeRecoveringBook() {
         FeatureQuality quality = FeatureQuality.builder()
                 .syncStatus(SyncStatus.RECOVERING)
-                .staleBbo(false)
-                .staleBook(false)
+                .staleOrderBookState(false)
                 .staleTrades(false)
                 .incompleteBook(false)
                 .build();
@@ -76,8 +73,7 @@ class QualitySignalRuleTest {
     void staleTradesEmitsNoTradeStaleTrades() {
         FeatureQuality quality = FeatureQuality.builder()
                 .syncStatus(SyncStatus.IN_SYNC)
-                .staleBbo(false)
-                .staleBook(false)
+                .staleOrderBookState(false)
                 .staleTrades(true)
                 .incompleteBook(false)
                 .build();
@@ -92,8 +88,7 @@ class QualitySignalRuleTest {
     void incompleteBookEmitsNoTradeIncompleteBook() {
         FeatureQuality quality = FeatureQuality.builder()
                 .syncStatus(SyncStatus.IN_SYNC)
-                .staleBbo(false)
-                .staleBook(false)
+                .staleOrderBookState(false)
                 .staleTrades(false)
                 .incompleteBook(true)
                 .build();

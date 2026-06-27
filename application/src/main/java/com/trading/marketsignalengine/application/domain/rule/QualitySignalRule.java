@@ -68,21 +68,12 @@ public class QualitySignalRule implements SignalRule {
                     null));
         }
 
-        if (quality.staleBbo()) {
-            signals.add(MarketSignal.riskOff(
-                    SignalType.NO_TRADE_STALE_BBO,
-                    SignalStrength.STRONG,
-                    BigDecimal.ONE,
-                    "BBO data is stale",
-                    null));
-        }
-
-        if (quality.staleBook()) {
+        if (quality.staleOrderBookState()) {
             signals.add(MarketSignal.riskOff(
                     SignalType.NO_TRADE_STALE_BOOK,
                     SignalStrength.STRONG,
                     BigDecimal.ONE,
-                    "Order book data is stale",
+                    "Order book state is stale",
                     null));
         }
 
