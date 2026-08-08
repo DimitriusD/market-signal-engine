@@ -6,5 +6,5 @@ import lombok.Builder;
 @Builder
 public record RegimeFeature(
         BigDecimal lastTradeDistanceToMidBps,
-        BigDecimal shortTermVolatility1s) {
+        BigDecimal realizedVolatilityBps1s) {
 }

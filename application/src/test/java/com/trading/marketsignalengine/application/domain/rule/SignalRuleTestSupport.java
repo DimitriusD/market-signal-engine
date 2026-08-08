@@ -29,8 +29,8 @@ public final class SignalRuleTestSupport {
      * A fully populated, tradable snapshot whose directional features would produce BUY_PRESSURE,
      * ORDER_BOOK_BULLISH, SPREAD_ACCEPTABLE and VOLATILITY_NORMAL. Callers override individual
      * features (quality, bbo, regime, ...) to build gate scenarios. The regime feature still carries
-     * shortTermVolatility1s (consumed by VolatilitySignalRule) and lastTradeDistanceToMidBps, but the
-     * latter no longer produces a signal.
+     * realizedVolatilityBps1s (consumed by VolatilitySignalRule) and lastTradeDistanceToMidBps, but
+     * the latter no longer produces a signal.
      */
     public static MarketFeaturesSnapshot.MarketFeaturesSnapshotBuilder tradableFeaturesBuilder() {
         return MarketFeaturesSnapshot.builder()
@@ -53,7 +53,7 @@ public final class SignalRuleTestSupport {
                         .tradeCount5s(50)
                         .build())
                 .regime(RegimeFeature.builder()
-                        .shortTermVolatility1s(new BigDecimal("0.005"))
+                        .realizedVolatilityBps1s(new BigDecimal("5.0"))
                         .lastTradeDistanceToMidBps(new BigDecimal("1.0"))
                         .build());
     }
