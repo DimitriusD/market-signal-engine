@@ -71,6 +71,35 @@ class MarketFeaturesSnapshotAvroMapperTest {
     }
 
     @Test
+    void mapsRealizedVolatilityBps1sAndIgnoresDeprecatedVolatilityField() {
+        // Domain volatility comes only from realizedVolatilityBps1s; the deprecated
+        // shortTermVolatility1s alias must never leak into the domain model.
+        ShortTermRegimeFeaturesEvent regimeEvent = ShortTermRegimeFeaturesEvent.newBuilder()
+                .setLastTradeDistanceToMidBps("1.5")
+                .setShortTermVolatility1s("999.0")
+                .setRealizedVolatilityBps1s("4.2")
+                .build();
+
+        MarketFeaturesSnapshot snapshot = MarketFeaturesSnapshotAvroMapper.toDomain(
+                snapshotEventWith(TradeFlowFeaturesEvent.newBuilder().build(), regimeEvent));
+
+        assertEquals(new BigDecimal("4.2"), snapshot.regime().realizedVolatilityBps1s());
+        assertEquals(new BigDecimal("1.5"), snapshot.regime().lastTradeDistanceToMidBps());
+    }
+
+    @Test
+    void missingRealizedVolatilityMapsToNull() {
+        ShortTermRegimeFeaturesEvent regimeEvent = ShortTermRegimeFeaturesEvent.newBuilder()
+                .setShortTermVolatility1s("999.0")
+                .build();
+
+        MarketFeaturesSnapshot snapshot = MarketFeaturesSnapshotAvroMapper.toDomain(
+                snapshotEventWith(TradeFlowFeaturesEvent.newBuilder().build(), regimeEvent));
+
+        assertEquals(null, snapshot.regime().realizedVolatilityBps1s());
+    }
+
+    @Test
     void invalidDecimalThrowsAvroMappingException() {
         TradeFlowFeaturesEvent tradeFlowEvent = TradeFlowFeaturesEvent.newBuilder()
                 .setSignedFlowImbalance5s("not-a-number")
@@ -82,6 +111,11 @@ class MarketFeaturesSnapshotAvroMapperTest {
     }
 
     private static MarketFeaturesSnapshotEvent snapshotEventWith(TradeFlowFeaturesEvent tradeFlow) {
+        return snapshotEventWith(tradeFlow, ShortTermRegimeFeaturesEvent.newBuilder().build());
+    }
+
+    private static MarketFeaturesSnapshotEvent snapshotEventWith(TradeFlowFeaturesEvent tradeFlow,
+                                                                 ShortTermRegimeFeaturesEvent regime) {
         return MarketFeaturesSnapshotEvent.newBuilder()
                 .setMetadata(metadata())
                 .setComputedTs(1700000002000L)
@@ -91,7 +125,7 @@ class MarketFeaturesSnapshotAvroMapperTest {
                 .setBbo(BboFeaturesEvent.newBuilder().build())
                 .setBook(BookFeaturesEvent.newBuilder().setLevelsUsed(5).build())
                 .setTradeFlow(tradeFlow)
-                .setRegime(ShortTermRegimeFeaturesEvent.newBuilder().build())
+                .setRegime(regime)
                 .build();
     }
 

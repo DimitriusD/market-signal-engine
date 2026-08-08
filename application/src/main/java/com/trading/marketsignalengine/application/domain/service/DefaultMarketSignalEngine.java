@@ -28,10 +28,14 @@ import java.util.stream.Collectors;
  *       stale BBO can never produce a spread verdict;</li>
  *   <li>directional rules + composite setups — only ever run on tradable data.</li>
  * </ol>
- * A no-trade condition at any gate ends evaluation immediately: directional signals are never
- * produced, so they can leak neither into the published signal list nor into the directional score.
- * The RISK_OFF short-circuit in {@link DirectionalReduction} is then a backstop, not the sole line
- * of defence. The engine is the single emitter of {@link SignalType#NO_TRADE_CONDITION}.
+ * A no-trade condition at any gate ends evaluation immediately. Phases 1–2 cannot have produced
+ * directional evidence yet; in phase 3 an earlier directional rule may already have emitted
+ * bullish/bearish signals before a later rule detected an invalid feature value, so
+ * {@link #aggregateNoTrade} additionally strips directional evidence from the published list. The
+ * invariant therefore holds unconditionally: a no-trade snapshot never contains bullish/bearish
+ * signals, neither in the published signal list nor in the directional score. The RISK_OFF
+ * short-circuit in {@link DirectionalReduction} is then a backstop, not the sole line of defence.
+ * The engine is the single emitter of {@link SignalType#NO_TRADE_CONDITION}.
  */
 public class DefaultMarketSignalEngine implements MarketSignalEngine {
 
@@ -98,10 +102,18 @@ public class DefaultMarketSignalEngine implements MarketSignalEngine {
         }
     }
 
+    /**
+     * Assembles the published no-trade snapshot. Directional (bullish/bearish) evidence emitted by
+     * an earlier phase-3 rule before a later rule went RISK_OFF is dropped: publishing actionable
+     * directional signals alongside NO_TRADE_CONDITION would hand downstream contradictory evidence.
+     */
     private MarketSignalSnapshot aggregateNoTrade(SignalEvaluationContext context,
                                                   List<MarketSignal> gateSignals) {
-        List<MarketSignal> signals = new ArrayList<>(gateSignals);
-        signals.add(noTradeCondition(gateSignals));
+        List<MarketSignal> signals = gateSignals.stream()
+                .filter(signal -> signal.direction() != SignalDirection.BULLISH
+                        && signal.direction() != SignalDirection.BEARISH)
+                .collect(Collectors.toCollection(ArrayList::new));
+        signals.add(noTradeCondition(signals));
         return signalAggregator.aggregate(context, signals);
     }
 

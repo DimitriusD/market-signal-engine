@@ -32,7 +32,7 @@ class VolatilitySignalRuleTest {
     }
 
     @Test
-    void missingShortTermVolatilityEmitsRiskOffNoTrade() {
+    void missingRealizedVolatilityEmitsRiskOffNoTrade() {
         List<MarketSignal> signals = evaluate(featuresWithRegime(
                 RegimeFeature.builder().lastTradeDistanceToMidBps(new BigDecimal("1.0")).build()));
 
@@ -41,13 +41,13 @@ class VolatilitySignalRuleTest {
         assertEquals(SignalType.NO_TRADE_VOLATILITY_MISSING, signal.type());
         assertEquals(SignalDirection.RISK_OFF, signal.direction());
         assertFalse(signal.reason().contains("skeleton"));
-        assertEquals("SHORT_TERM_VOLATILITY_1S_MISSING", signal.attributes().get("riskReason"));
+        assertEquals("REALIZED_VOLATILITY_BPS_1S_MISSING", signal.attributes().get("riskReason"));
     }
 
     @Test
     void volatilityEqualToThresholdEmitsVolatilityNormal() {
-        // Default maxShortTermVolatility1s is 0.01; the boundary is inclusive (normal).
-        MarketSignal signal = evaluateFirst(volatility(new BigDecimal("0.01")));
+        // Default maxRealizedVolatilityBps1s is 50.0 bps; the boundary is inclusive (normal).
+        MarketSignal signal = evaluateFirst(volatility(new BigDecimal("50.0")));
 
         assertEquals(SignalType.VOLATILITY_NORMAL, signal.type());
         assertEquals(SignalDirection.NEUTRAL, signal.direction());
@@ -55,7 +55,7 @@ class VolatilitySignalRuleTest {
 
     @Test
     void volatilityBelowThresholdEmitsVolatilityNormal() {
-        MarketSignal signal = evaluateFirst(volatility(new BigDecimal("0.005")));
+        MarketSignal signal = evaluateFirst(volatility(new BigDecimal("5.0")));
 
         assertEquals(SignalType.VOLATILITY_NORMAL, signal.type());
         assertEquals(SignalDirection.NEUTRAL, signal.direction());
@@ -63,30 +63,40 @@ class VolatilitySignalRuleTest {
 
     @Test
     void volatilityAboveThresholdEmitsVolatilityHigh() {
-        MarketSignal signal = evaluateFirst(volatility(new BigDecimal("0.05")));
+        MarketSignal signal = evaluateFirst(volatility(new BigDecimal("120.0")));
 
         assertEquals(SignalType.VOLATILITY_HIGH, signal.type());
         assertEquals(SignalDirection.RISK_OFF, signal.direction());
+        assertEquals("REALIZED_VOLATILITY_BPS_1S_ABOVE_THRESHOLD", signal.attributes().get("riskReason"));
     }
 
     @Test
-    void volatilityNormalContainsLastTradeDistanceToMid() {
-        MarketSignal signal = evaluateFirst(volatility(new BigDecimal("0.005")));
+    void volatilityNormalContainsObservedValuesAndCalibrationMarker() {
+        MarketSignal signal = evaluateFirst(volatility(new BigDecimal("5.0")));
 
         assertEquals(SignalType.VOLATILITY_NORMAL, signal.type());
-        assertEquals("0.005", signal.attributes().get("shortTermVolatility1s"));
-        assertEquals("0.01", signal.attributes().get("maxShortTermVolatility1s"));
+        assertEquals("5.0", signal.attributes().get("realizedVolatilityBps1s"));
+        assertEquals("50.0", signal.attributes().get("maxRealizedVolatilityBps1s"));
+        assertEquals("UNCALIBRATED", signal.attributes().get("volatilityThresholdCalibration"));
         assertEquals("1.0", signal.attributes().get("lastTradeDistanceToMidBps"));
     }
 
     @Test
+    void everyVolatilitySignalCarriesUncalibratedMarkerUntilReplayCalibration() {
+        assertEquals("UNCALIBRATED",
+                evaluateFirst(featuresWithRegime(null)).attributes().get("volatilityThresholdCalibration"));
+        assertEquals("UNCALIBRATED",
+                evaluateFirst(volatility(new BigDecimal("120.0"))).attributes().get("volatilityThresholdCalibration"));
+    }
+
+    @Test
     void negativeVolatilityProducesNoTradeInvalidVolatility() {
-        // Negative volatility is an impossible feature value: no-trade, not VOLATILITY_NORMAL.
-        MarketSignal signal = evaluateFirst(volatility(new BigDecimal("-0.01")));
+        // Negative realized volatility is an impossible feature value: no-trade, not VOLATILITY_NORMAL.
+        MarketSignal signal = evaluateFirst(volatility(new BigDecimal("-1.0")));
 
         assertEquals(SignalType.NO_TRADE_INVALID_VOLATILITY, signal.type());
         assertEquals(SignalDirection.RISK_OFF, signal.direction());
-        assertEquals("SHORT_TERM_VOLATILITY_1S_NEGATIVE", signal.attributes().get("riskReason"));
+        assertEquals("REALIZED_VOLATILITY_BPS_1S_NEGATIVE", signal.attributes().get("riskReason"));
     }
 
     private MarketSignal evaluateFirst(MarketFeaturesSnapshot features) {
@@ -97,9 +107,9 @@ class VolatilitySignalRuleTest {
         return rule.evaluate(SignalRuleTestSupport.context(features));
     }
 
-    private static MarketFeaturesSnapshot volatility(BigDecimal shortTermVolatility1s) {
+    private static MarketFeaturesSnapshot volatility(BigDecimal realizedVolatilityBps1s) {
         return featuresWithRegime(RegimeFeature.builder()
-                .shortTermVolatility1s(shortTermVolatility1s)
+                .realizedVolatilityBps1s(realizedVolatilityBps1s)
                 .lastTradeDistanceToMidBps(new BigDecimal("1.0"))
                 .build());
     }

@@ -12,7 +12,7 @@ public record SignalConfiguration(
         int minTradeCount5sForTradeFlowSignal,
         BigDecimal buyBookImbalanceThreshold,
         BigDecimal sellBookImbalanceThreshold,
-        BigDecimal maxShortTermVolatility1s,
+        BigDecimal maxRealizedVolatilityBps1s,
         long microstructureSetupTtlMs,
         long riskOffTtlMs,
         long neutralTtlMs) {
@@ -42,8 +42,8 @@ public record SignalConfiguration(
             throw new IllegalArgumentException(
                     "buyBookImbalanceThreshold must be greater than sellBookImbalanceThreshold");
         }
-        if (maxShortTermVolatility1s == null || maxShortTermVolatility1s.signum() < 0) {
-            throw new IllegalArgumentException("maxShortTermVolatility1s must be non-negative");
+        if (maxRealizedVolatilityBps1s == null || maxRealizedVolatilityBps1s.signum() < 0) {
+            throw new IllegalArgumentException("maxRealizedVolatilityBps1s must be non-negative");
         }
         if (microstructureSetupTtlMs <= 0) {
             throw new IllegalArgumentException("microstructureSetupTtlMs must be positive");
@@ -56,16 +56,21 @@ public record SignalConfiguration(
         }
     }
 
+    /**
+     * {@code maxRealizedVolatilityBps1s} is an uncalibrated placeholder: generous on purpose, it
+     * blocks only clearly extreme 1s regimes. The calibrated value comes from the first replay pass
+     * over recorded MFS v2 data (path-to-paper-trading.md, decision 8.2).
+     */
     public static SignalConfiguration defaults() {
         return SignalConfiguration.builder()
-                .signalSetVersion("mse-signals-v6")
+                .signalSetVersion("mse-signals-v7")
                 .maxSpreadBps(new BigDecimal("2.0"))
                 .buyFlowImbalance5sThreshold(new BigDecimal("0.15"))
                 .sellFlowImbalance5sThreshold(new BigDecimal("-0.15"))
                 .minTradeCount5sForTradeFlowSignal(10)
                 .buyBookImbalanceThreshold(new BigDecimal("0.60"))
                 .sellBookImbalanceThreshold(new BigDecimal("-0.60"))
-                .maxShortTermVolatility1s(new BigDecimal("0.01"))
+                .maxRealizedVolatilityBps1s(new BigDecimal("50.0"))
                 .microstructureSetupTtlMs(2_000L)
                 .riskOffTtlMs(5_000L)
                 .neutralTtlMs(1_000L)

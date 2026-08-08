@@ -17,7 +17,7 @@ public class SignalProperties {
     private Integer minTradeCount5sForTradeFlowSignal;
     private BigDecimal buyBookImbalanceThreshold;
     private BigDecimal sellBookImbalanceThreshold;
-    private BigDecimal maxShortTermVolatility1s;
+    private BigDecimal maxRealizedVolatilityBps1s;
     private Long microstructureSetupTtlMs;
     private Long riskOffTtlMs;
     private Long neutralTtlMs;

@@ -26,7 +26,7 @@ public class InfrastructureConfig {
     @Bean
     public SignalConfiguration signalConfiguration(SignalProperties properties) {
         return SignalConfiguration.builder()
-                .signalSetVersion(defaultString(properties.getSignalSetVersion(), "mse-signals-v6"))
+                .signalSetVersion(defaultString(properties.getSignalSetVersion(), "mse-signals-v7"))
                 .maxSpreadBps(defaultDecimal(properties.getMaxSpreadBps(), "2.0"))
                 .buyFlowImbalance5sThreshold(defaultDecimal(properties.getBuyFlowImbalance5sThreshold(), "0.15"))
                 .sellFlowImbalance5sThreshold(defaultDecimal(properties.getSellFlowImbalance5sThreshold(), "-0.15"))
@@ -34,7 +34,7 @@ public class InfrastructureConfig {
                         defaultInteger(properties.getMinTradeCount5sForTradeFlowSignal(), 10))
                 .buyBookImbalanceThreshold(defaultDecimal(properties.getBuyBookImbalanceThreshold(), "0.60"))
                 .sellBookImbalanceThreshold(defaultDecimal(properties.getSellBookImbalanceThreshold(), "-0.60"))
-                .maxShortTermVolatility1s(defaultDecimal(properties.getMaxShortTermVolatility1s(), "0.01"))
+                .maxRealizedVolatilityBps1s(defaultDecimal(properties.getMaxRealizedVolatilityBps1s(), "50.0"))
                 .microstructureSetupTtlMs(defaultLong(properties.getMicrostructureSetupTtlMs(), 2_000L))
                 .riskOffTtlMs(defaultLong(properties.getRiskOffTtlMs(), 5_000L))
                 .neutralTtlMs(defaultLong(properties.getNeutralTtlMs(), 1_000L))

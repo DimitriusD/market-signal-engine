@@ -134,8 +134,8 @@ public final class MarketFeaturesSnapshotAvroMapper {
         return RegimeFeature.builder()
                 .lastTradeDistanceToMidBps(
                         decimal("regime.lastTradeDistanceToMidBps", regime.getLastTradeDistanceToMidBps()))
-                .shortTermVolatility1s(
-                        decimal("regime.shortTermVolatility1s", regime.getShortTermVolatility1s()))
+                .realizedVolatilityBps1s(
+                        decimal("regime.realizedVolatilityBps1s", regime.getRealizedVolatilityBps1s()))
                 .build();
     }
 

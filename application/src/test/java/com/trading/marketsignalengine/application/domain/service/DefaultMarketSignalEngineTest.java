@@ -10,6 +10,7 @@ import com.trading.marketsignalengine.application.domain.model.MarketSignalSnaps
 import com.trading.marketsignalengine.application.domain.model.RiskLevel;
 import com.trading.marketsignalengine.application.domain.model.SetupSide;
 import com.trading.marketsignalengine.application.domain.model.SignalConfiguration;
+import com.trading.marketsignalengine.application.domain.model.SignalDirection;
 import com.trading.marketsignalengine.application.domain.model.SignalType;
 import com.trading.marketsignalengine.application.domain.model.SyncStatus;
 import com.trading.marketsignalengine.application.domain.model.feature.BboFeature;
@@ -149,7 +150,7 @@ class DefaultMarketSignalEngineTest {
     void highVolatilitySuppressesDirectionalSignals() {
         MarketFeaturesSnapshot features = SignalRuleTestSupport.tradableFeaturesBuilder()
                 .regime(RegimeFeature.builder()
-                        .shortTermVolatility1s(new BigDecimal("0.05"))
+                        .realizedVolatilityBps1s(new BigDecimal("120.0"))
                         .lastTradeDistanceToMidBps(new BigDecimal("1.0"))
                         .build())
                 .build();
@@ -253,11 +254,45 @@ class DefaultMarketSignalEngineTest {
     }
 
     @Test
+    void directionalEvidenceEmittedBeforeAPhase3RiskOffIsNotPublished() {
+        // TradeFlowSignalRule (runs first) emits BUY_PRESSURE; OrderBookSignalRule (runs second)
+        // then detects an out-of-range top5Imbalance and goes RISK_OFF. The published no-trade
+        // snapshot must not carry the already-emitted directional evidence: a no-trade snapshot
+        // never contains bullish/bearish signals.
+        MarketFeaturesSnapshot features = SignalRuleTestSupport.tradableFeaturesBuilder()
+                .book(BookFeature.builder()
+                        .levelsUsed(5)
+                        .top5Imbalance(new BigDecimal("2.0"))
+                        .build())
+                .build();
+
+        MarketSignalSnapshot snapshot = engine.evaluate(features);
+
+        assertEquals(MarketBias.RISK_OFF, snapshot.marketBias());
+        assertEquals(0, snapshot.marketBiasScore().signum());
+        assertEquals(RiskLevel.NO_TRADE, snapshot.riskLevel());
+        assertEquals(SetupSide.NONE, snapshot.setup().side());
+
+        assertTrue(has(snapshot, SignalType.NO_TRADE_INVALID_ORDER_BOOK));
+        assertTrue(has(snapshot, SignalType.NO_TRADE_CONDITION));
+
+        assertFalse(has(snapshot, SignalType.BUY_PRESSURE));
+        assertFalse(has(snapshot, SignalType.SELL_PRESSURE));
+        assertFalse(has(snapshot, SignalType.ORDER_BOOK_BULLISH));
+        assertFalse(has(snapshot, SignalType.LONG_SETUP_FORMING));
+
+        // The invariant holds for every published signal, not just known types.
+        assertTrue(snapshot.signals().stream()
+                .noneMatch(signal -> signal.direction() == SignalDirection.BULLISH
+                        || signal.direction() == SignalDirection.BEARISH));
+    }
+
+    @Test
     void invalidVolatilityProducesNoTradeRiskOffSnapshot() {
         // Negative volatility is an impossible feature value; the tradability gate must reject it.
         MarketFeaturesSnapshot features = SignalRuleTestSupport.tradableFeaturesBuilder()
                 .regime(RegimeFeature.builder()
-                        .shortTermVolatility1s(new BigDecimal("-0.01"))
+                        .realizedVolatilityBps1s(new BigDecimal("-1.0"))
                         .lastTradeDistanceToMidBps(new BigDecimal("1.0"))
                         .build())
                 .build();
