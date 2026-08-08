@@ -4,7 +4,10 @@ import com.trading.marketsignalengine.application.domain.model.SignalConfigurati
 import com.trading.marketsignalengine.application.domain.rule.*;
 import com.trading.marketsignalengine.application.domain.service.DefaultMarketSignalEngine;
 import com.trading.marketsignalengine.application.domain.service.MarketSignalEngine;
+import com.trading.marketsignalengine.application.domain.service.SetupResolver;
 import com.trading.marketsignalengine.application.domain.service.SignalAggregator;
+import com.trading.marketsignalengine.application.domain.service.SignalValidityResolver;
+import com.trading.marketsignalengine.application.domain.validation.MarketFeaturesSnapshotValidator;
 import com.trading.marketsignalengine.application.port.input.MarketFeaturesHandler;
 import com.trading.marketsignalengine.application.port.output.MarketSignalSnapshotPublisherPort;
 import com.trading.marketsignalengine.application.service.MarketSignalHandleService;
@@ -13,6 +16,7 @@ import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.util.List;
 
 @Configuration
@@ -22,13 +26,18 @@ public class InfrastructureConfig {
     @Bean
     public SignalConfiguration signalConfiguration(SignalProperties properties) {
         return SignalConfiguration.builder()
-                .signalSetVersion(defaultString(properties.getSignalSetVersion(), "mse-signals-v1"))
+                .signalSetVersion(defaultString(properties.getSignalSetVersion(), "mse-signals-v6"))
                 .maxSpreadBps(defaultDecimal(properties.getMaxSpreadBps(), "2.0"))
-                .buySignedTradeFlow5sThreshold(defaultDecimal(properties.getBuySignedTradeFlow5sThreshold(), "0.0"))
-                .sellSignedTradeFlow5sThreshold(defaultDecimal(properties.getSellSignedTradeFlow5sThreshold(), "0.0"))
+                .buyFlowImbalance5sThreshold(defaultDecimal(properties.getBuyFlowImbalance5sThreshold(), "0.15"))
+                .sellFlowImbalance5sThreshold(defaultDecimal(properties.getSellFlowImbalance5sThreshold(), "-0.15"))
+                .minTradeCount5sForTradeFlowSignal(
+                        defaultInteger(properties.getMinTradeCount5sForTradeFlowSignal(), 10))
                 .buyBookImbalanceThreshold(defaultDecimal(properties.getBuyBookImbalanceThreshold(), "0.60"))
                 .sellBookImbalanceThreshold(defaultDecimal(properties.getSellBookImbalanceThreshold(), "-0.60"))
                 .maxShortTermVolatility1s(defaultDecimal(properties.getMaxShortTermVolatility1s(), "0.01"))
+                .microstructureSetupTtlMs(defaultLong(properties.getMicrostructureSetupTtlMs(), 2_000L))
+                .riskOffTtlMs(defaultLong(properties.getRiskOffTtlMs(), 5_000L))
+                .neutralTtlMs(defaultLong(properties.getNeutralTtlMs(), 1_000L))
                 .build();
     }
 
@@ -58,18 +67,30 @@ public class InfrastructureConfig {
     }
 
     @Bean
-    public RegimeSignalRule regimeSignalRule() {
-        return new RegimeSignalRule();
-    }
-
-    @Bean
     public CompositeSignalRule compositeSignalRule() {
         return new DefaultCompositeSignalRule();
     }
 
     @Bean
-    public SignalAggregator signalAggregator() {
-        return new SignalAggregator();
+    public SetupResolver setupResolver() {
+        return new SetupResolver();
+    }
+
+    @Bean
+    public SignalValidityResolver signalValidityResolver() {
+        return new SignalValidityResolver();
+    }
+
+    @Bean
+    public SignalAggregator signalAggregator(
+            SetupResolver setupResolver,
+            SignalValidityResolver signalValidityResolver) {
+        return new SignalAggregator(setupResolver, signalValidityResolver);
+    }
+
+    @Bean
+    public Clock clock() {
+        return Clock.systemUTC();
     }
 
     @Bean
@@ -79,32 +100,41 @@ public class InfrastructureConfig {
             TradeFlowSignalRule tradeFlowSignalRule,
             OrderBookSignalRule orderBookSignalRule,
             VolatilitySignalRule volatilitySignalRule,
-            RegimeSignalRule regimeSignalRule,
             CompositeSignalRule compositeSignalRule,
             SignalAggregator signalAggregator,
-            SignalConfiguration signalConfiguration) {
+            SignalConfiguration signalConfiguration,
+            Clock clock) {
         List<SignalRule> qualityGateRules = List.of(qualitySignalRule);
         List<SignalRule> tradabilityGateRules = List.of(
                 spreadSignalRule,
                 volatilitySignalRule);
+        // Regime is intentionally not a directional rule: lastTradeDistanceToMidBps is point-in-time
+        // microstructure, not a trend. A real regime classifier belongs over windowed features. See
+        // DirectionalReduction#DIRECTIONAL_BASE_TYPES, which also excludes REGIME from the score.
         List<SignalRule> directionalRules = List.of(
                 tradeFlowSignalRule,
-                orderBookSignalRule,
-                regimeSignalRule);
+                orderBookSignalRule);
         return new DefaultMarketSignalEngine(
                 qualityGateRules,
                 tradabilityGateRules,
                 directionalRules,
                 compositeSignalRule,
                 signalAggregator,
-                signalConfiguration);
+                signalConfiguration,
+                clock);
+    }
+
+    @Bean
+    public MarketFeaturesSnapshotValidator marketFeaturesSnapshotValidator() {
+        return new MarketFeaturesSnapshotValidator();
     }
 
     @Bean
     public MarketFeaturesHandler marketFeatureHandler(
             MarketSignalEngine marketSignalEngine,
-            MarketSignalSnapshotPublisherPort publisher) {
-        return new MarketSignalHandleService(marketSignalEngine, publisher);
+            MarketSignalSnapshotPublisherPort publisher,
+            MarketFeaturesSnapshotValidator validator) {
+        return new MarketSignalHandleService(marketSignalEngine, publisher, validator);
     }
 
     private static String defaultString(String value, String fallback) {
@@ -113,5 +143,13 @@ public class InfrastructureConfig {
 
     private static BigDecimal defaultDecimal(BigDecimal value, String fallback) {
         return value == null ? new BigDecimal(fallback) : value;
+    }
+
+    private static int defaultInteger(Integer value, int fallback) {
+        return value == null ? fallback : value;
+    }
+
+    private static long defaultLong(Long value, long fallback) {
+        return value == null ? fallback : value;
     }
 }

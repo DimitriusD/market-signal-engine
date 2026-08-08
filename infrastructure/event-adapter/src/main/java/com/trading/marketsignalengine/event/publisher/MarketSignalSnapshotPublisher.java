@@ -33,13 +33,17 @@ public final class MarketSignalSnapshotPublisher implements MarketSignalSnapshot
             kafkaTemplate.send(topic, key, event).join();
 
             log.info(
-                    "Published market signal snapshot: topic={}, key={}, signalSnapshotId={}, sourceFeatureSnapshotId={}, marketBias={}, riskLevel={}",
+                    "Published market signal snapshot: topic={}, key={}, signalSnapshotId={}, sourceFeatureSnapshotId={}, marketBias={}, riskLevel={}, setupSide={}, setupType={}, ttlMs={}, validUntil={}",
                     topic,
                     key,
                     snapshot.signalSnapshotId(),
                     snapshot.sourceFeatureSnapshotId(),
                     snapshot.marketBias(),
-                    snapshot.riskLevel());
+                    snapshot.riskLevel(),
+                    snapshot.setup() != null ? snapshot.setup().side() : null,
+                    snapshot.setup() != null ? snapshot.setup().type() : null,
+                    snapshot.ttlMs(),
+                    snapshot.validUntil());
         } catch (RuntimeException ex) {
             log.error(
                     "Failed to publish market signal snapshot: topic={}, key={}, signalSnapshotId={}, sourceFeatureSnapshotId={}",

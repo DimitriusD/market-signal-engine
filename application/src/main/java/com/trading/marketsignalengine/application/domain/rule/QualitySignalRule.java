@@ -9,7 +9,9 @@ import com.trading.marketsignalengine.application.domain.model.SignalType;
 import com.trading.marketsignalengine.application.domain.model.SyncStatus;
 import java.math.BigDecimal;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
 public class QualitySignalRule implements SignalRule {
 
@@ -21,13 +23,15 @@ public class QualitySignalRule implements SignalRule {
 
         if (quality == null) {
             signals.add(MarketSignal.riskOff(
-                    SignalType.NO_TRADE_CONDITION,
+                    SignalType.NO_TRADE_QUALITY_MISSING,
                     SignalStrength.EXTREME,
                     BigDecimal.ONE,
                     "Feature quality is missing",
-                    null));
+                    qualityAttributes(null, SyncStatus.UNKNOWN, "QUALITY_MISSING")));
             return signals;
         }
+
+        SyncStatus syncStatus = quality.syncStatus() != null ? quality.syncStatus() : SyncStatus.UNKNOWN;
 
         if (quality.isTradable()) {
             signals.add(MarketSignal.neutral(
@@ -35,11 +39,9 @@ public class QualitySignalRule implements SignalRule {
                     SignalStrength.NONE,
                     BigDecimal.ONE,
                     "Feature snapshot is tradable",
-                    null));
+                    qualityAttributes(quality, syncStatus, "DATA_TRADABLE")));
             return signals;
         }
-
-        SyncStatus syncStatus = quality.syncStatus() != null ? quality.syncStatus() : SyncStatus.UNKNOWN;
 
         if (syncStatus == SyncStatus.OUT_OF_SYNC || syncStatus == SyncStatus.UNKNOWN) {
             signals.add(MarketSignal.riskOff(
@@ -47,7 +49,7 @@ public class QualitySignalRule implements SignalRule {
                     SignalStrength.STRONG,
                     BigDecimal.ONE,
                     "Feature snapshot is out of sync",
-                    null));
+                    qualityAttributes(quality, syncStatus, "OUT_OF_SYNC_OR_UNKNOWN")));
         }
 
         if (syncStatus == SyncStatus.RECOVERING) {
@@ -56,25 +58,16 @@ public class QualitySignalRule implements SignalRule {
                     SignalStrength.STRONG,
                     BigDecimal.ONE,
                     "Order book is recovering",
-                    null));
+                    qualityAttributes(quality, syncStatus, "RECOVERING_BOOK")));
         }
 
-        if (syncStatus == SyncStatus.STALE) {
+        if (syncStatus == SyncStatus.STALE || quality.staleOrderBookState()) {
             signals.add(MarketSignal.riskOff(
                     SignalType.NO_TRADE_STALE_BOOK,
                     SignalStrength.STRONG,
                     BigDecimal.ONE,
-                    "Order book sync status is stale",
-                    null));
-        }
-
-        if (quality.staleOrderBookState()) {
-            signals.add(MarketSignal.riskOff(
-                    SignalType.NO_TRADE_STALE_BOOK,
-                    SignalStrength.STRONG,
-                    BigDecimal.ONE,
-                    "Order book state is stale",
-                    null));
+                    staleBookReason(syncStatus, quality),
+                    qualityAttributes(quality, syncStatus, "STALE_BOOK")));
         }
 
         if (quality.staleTrades()) {
@@ -83,7 +76,7 @@ public class QualitySignalRule implements SignalRule {
                     SignalStrength.STRONG,
                     BigDecimal.ONE,
                     "Trade data is stale",
-                    null));
+                    qualityAttributes(quality, syncStatus, "STALE_TRADES")));
         }
 
         if (quality.incompleteBook()) {
@@ -92,9 +85,37 @@ public class QualitySignalRule implements SignalRule {
                     SignalStrength.STRONG,
                     BigDecimal.ONE,
                     "Order book is incomplete",
-                    null));
+                    qualityAttributes(quality, syncStatus, "INCOMPLETE_BOOK")));
         }
 
         return signals;
+    }
+
+    private static Map<String, String> qualityAttributes(FeatureQuality quality, SyncStatus syncStatus, String reason) {
+        Map<String, String> attributes = new LinkedHashMap<>();
+        attributes.put("qualityReason", reason);
+
+        if (syncStatus != null) {
+            attributes.put("syncStatus", syncStatus.name());
+        }
+
+        if (quality != null) {
+            SignalAttributes.putBoolean(attributes, "staleOrderBookState", quality.staleOrderBookState());
+            SignalAttributes.putBoolean(attributes, "staleTrades", quality.staleTrades());
+            SignalAttributes.putBoolean(attributes, "incompleteBook", quality.incompleteBook());
+            SignalAttributes.putIfPresent(attributes, "orderBookStateAgeMs", quality.orderBookStateAgeMs());
+            SignalAttributes.putIfPresent(attributes, "tradeAgeMs", quality.tradeAgeMs());
+        }
+
+        return attributes;
+    }
+
+    private static String staleBookReason(SyncStatus syncStatus, FeatureQuality quality) {
+        boolean staleSync = syncStatus == SyncStatus.STALE;
+        boolean staleState = quality.staleOrderBookState();
+        if (staleSync && staleState) {
+            return "Order book sync status and state are stale";
+        }
+        return staleSync ? "Order book sync status is stale" : "Order book state is stale";
     }
 }

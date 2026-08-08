@@ -20,14 +20,18 @@ app:
     schema-registry:
       url: ${APP_SCHEMA_REGISTRY_URL:http://localhost:8081}
     topic:
-      market-features: ${APP_KAFKA_TOPIC_MARKET_FEATURES:state.market.features.v1}
+      market-features: ${APP_KAFKA_TOPIC_MARKET_FEATURES:market.features.snapshot.v1}
       market-signals: ${APP_KAFKA_TOPIC_MARKET_SIGNALS:state.market.signals.v1}
 
   signal:
-    signal-set-version: ${APP_SIGNAL_SET_VERSION:mse-signals-v1}
+    signal-set-version: ${APP_SIGNAL_SET_VERSION:mse-signals-v6}
     max-spread-bps: ${APP_SIGNAL_MAX_SPREAD_BPS:2.0}
-    buy-signed-trade-flow-5s-threshold: ${APP_SIGNAL_BUY_SIGNED_TRADE_FLOW_5S_THRESHOLD:0.0}
-    sell-signed-trade-flow-5s-threshold: ${APP_SIGNAL_SELL_SIGNED_TRADE_FLOW_5S_THRESHOLD:0.0}
+    buy-flow-imbalance-5s-threshold: ${APP_SIGNAL_BUY_FLOW_IMBALANCE_5S_THRESHOLD:0.15}
+    sell-flow-imbalance-5s-threshold: ${APP_SIGNAL_SELL_FLOW_IMBALANCE_5S_THRESHOLD:-0.15}
+    min-trade-count-5s-for-trade-flow-signal: ${APP_SIGNAL_MIN_TRADE_COUNT_5S_FOR_TRADE_FLOW_SIGNAL:10}
     buy-book-imbalance-threshold: ${APP_SIGNAL_BUY_BOOK_IMBALANCE_THRESHOLD:0.60}
     sell-book-imbalance-threshold: ${APP_SIGNAL_SELL_BOOK_IMBALANCE_THRESHOLD:-0.60}
     max-short-term-volatility-1s: ${APP_SIGNAL_MAX_SHORT_TERM_VOLATILITY_1S:0.01}
+    microstructure-setup-ttl-ms: ${APP_SIGNAL_MICROSTRUCTURE_SETUP_TTL_MS:2000}
+    risk-off-ttl-ms: ${APP_SIGNAL_RISK_OFF_TTL_MS:5000}
+    neutral-ttl-ms: ${APP_SIGNAL_NEUTRAL_TTL_MS:1000}

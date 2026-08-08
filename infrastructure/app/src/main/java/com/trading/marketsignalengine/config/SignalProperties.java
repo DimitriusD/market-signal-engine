@@ -12,9 +12,13 @@ public class SignalProperties {
 
     private String signalSetVersion;
     private BigDecimal maxSpreadBps;
-    private BigDecimal buySignedTradeFlow5sThreshold;
-    private BigDecimal sellSignedTradeFlow5sThreshold;
+    private BigDecimal buyFlowImbalance5sThreshold;
+    private BigDecimal sellFlowImbalance5sThreshold;
+    private Integer minTradeCount5sForTradeFlowSignal;
     private BigDecimal buyBookImbalanceThreshold;
     private BigDecimal sellBookImbalanceThreshold;
     private BigDecimal maxShortTermVolatility1s;
+    private Long microstructureSetupTtlMs;
+    private Long riskOffTtlMs;
+    private Long neutralTtlMs;
 }

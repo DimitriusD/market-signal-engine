@@ -2,6 +2,7 @@ package com.trading.marketsignalengine.event.config;
 
 import com.trading.contracts.feature.MarketFeaturesSnapshotEvent;
 import com.trading.contracts.signal.MarketSignalSnapshotEvent;
+import com.trading.marketsignalengine.application.domain.validation.InvalidMarketFeaturesSnapshotException;
 import com.trading.marketsignalengine.event.mapper.AvroMappingException;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
@@ -72,7 +73,9 @@ public class KafkaConfiguration {
                 dltKafkaTemplate, (message, ex) -> new TopicPartition(message.topic() + ".DLT", -1));
 
         var errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(1_000L, 3L));
-        errorHandler.addNotRetryableExceptions(AvroMappingException.class);
+        errorHandler.addNotRetryableExceptions(
+                AvroMappingException.class,
+                InvalidMarketFeaturesSnapshotException.class);
         return errorHandler;
     }
 

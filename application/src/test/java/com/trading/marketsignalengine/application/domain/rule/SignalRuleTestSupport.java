@@ -27,8 +27,10 @@ public final class SignalRuleTestSupport {
 
     /**
      * A fully populated, tradable snapshot whose directional features would produce BUY_PRESSURE,
-     * ORDER_BOOK_BULLISH, SPREAD_ACCEPTABLE, VOLATILITY_NORMAL and REGIME_TRENDING_UP. Callers
-     * override individual features (quality, bbo, regime, ...) to build gate scenarios.
+     * ORDER_BOOK_BULLISH, SPREAD_ACCEPTABLE and VOLATILITY_NORMAL. Callers override individual
+     * features (quality, bbo, regime, ...) to build gate scenarios. The regime feature still carries
+     * shortTermVolatility1s (consumed by VolatilitySignalRule) and lastTradeDistanceToMidBps, but the
+     * latter no longer produces a signal.
      */
     public static MarketFeaturesSnapshot.MarketFeaturesSnapshotBuilder tradableFeaturesBuilder() {
         return MarketFeaturesSnapshot.builder()
@@ -45,8 +47,11 @@ public final class SignalRuleTestSupport {
                 .featureSetVersion("mfs-core-v1")
                 .quality(tradableQuality())
                 .bbo(BboFeature.builder().spreadBps(new BigDecimal("1.0")).build())
-                .book(BookFeature.builder().top5Imbalance(new BigDecimal("0.70")).build())
-                .tradeFlow(TradeFlowFeature.builder().signedTradeFlow5s(new BigDecimal("100")).build())
+                .book(BookFeature.builder().levelsUsed(5).top5Imbalance(new BigDecimal("0.70")).build())
+                .tradeFlow(TradeFlowFeature.builder()
+                        .signedFlowImbalance5s(new BigDecimal("0.70"))
+                        .tradeCount5s(50)
+                        .build())
                 .regime(RegimeFeature.builder()
                         .shortTermVolatility1s(new BigDecimal("0.005"))
                         .lastTradeDistanceToMidBps(new BigDecimal("1.0"))

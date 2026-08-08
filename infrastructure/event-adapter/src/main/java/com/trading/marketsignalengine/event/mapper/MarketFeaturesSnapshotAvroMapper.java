@@ -104,12 +104,26 @@ public final class MarketFeaturesSnapshotAvroMapper {
         }
         return TradeFlowFeature.builder()
                 .lastTradePrice(decimal("tradeFlow.lastTradePrice", tradeFlow.getLastTradePrice()))
+
+                .buyAggressiveVolume1s(decimal("tradeFlow.buyAggressiveVolume1s", tradeFlow.getBuyAggressiveVolume1s()))
+                .sellAggressiveVolume1s(decimal("tradeFlow.sellAggressiveVolume1s", tradeFlow.getSellAggressiveVolume1s()))
+                .totalAggressiveVolume1s(decimal("tradeFlow.totalAggressiveVolume1s", tradeFlow.getTotalAggressiveVolume1s()))
                 .signedTradeFlow1s(decimal("tradeFlow.signedTradeFlow1s", tradeFlow.getSignedTradeFlow1s()))
-                .signedTradeFlow5s(decimal("tradeFlow.signedTradeFlow5s", tradeFlow.getSignedTradeFlow5s()))
+                .signedFlowImbalance1s(decimal("tradeFlow.signedFlowImbalance1s", tradeFlow.getSignedFlowImbalance1s()))
                 .tradeCount1s(tradeFlow.getTradeCount1s())
                 .tradeIntensity1s(decimal("tradeFlow.tradeIntensity1s", tradeFlow.getTradeIntensity1s()))
                 .avgTradeSize1s(decimal("tradeFlow.avgTradeSize1s", tradeFlow.getAvgTradeSize1s()))
                 .vwap1s(decimal("tradeFlow.vwap1s", tradeFlow.getVwap1s()))
+
+                .buyAggressiveVolume5s(decimal("tradeFlow.buyAggressiveVolume5s", tradeFlow.getBuyAggressiveVolume5s()))
+                .sellAggressiveVolume5s(decimal("tradeFlow.sellAggressiveVolume5s", tradeFlow.getSellAggressiveVolume5s()))
+                .totalAggressiveVolume5s(decimal("tradeFlow.totalAggressiveVolume5s", tradeFlow.getTotalAggressiveVolume5s()))
+                .signedTradeFlow5s(decimal("tradeFlow.signedTradeFlow5s", tradeFlow.getSignedTradeFlow5s()))
+                .signedFlowImbalance5s(decimal("tradeFlow.signedFlowImbalance5s", tradeFlow.getSignedFlowImbalance5s()))
+                .tradeCount5s(tradeFlow.getTradeCount5s())
+                .tradeIntensity5s(decimal("tradeFlow.tradeIntensity5s", tradeFlow.getTradeIntensity5s()))
+                .avgTradeSize5s(decimal("tradeFlow.avgTradeSize5s", tradeFlow.getAvgTradeSize5s()))
+                .vwap5s(decimal("tradeFlow.vwap5s", tradeFlow.getVwap5s()))
                 .build();
     }
 
@@ -150,8 +164,6 @@ public final class MarketFeaturesSnapshotAvroMapper {
         }
         return switch (syncStatus) {
             case IN_SYNC -> SyncStatus.IN_SYNC;
-            // DEGRADED has no dedicated domain state; treat it as RECOVERING so the
-            // quality gate routes it to a risk-off NO_TRADE_RECOVERING_BOOK signal.
             case RECOVERING, DEGRADED -> SyncStatus.RECOVERING;
             case OUT_OF_SYNC -> SyncStatus.OUT_OF_SYNC;
             case STALE -> SyncStatus.STALE;

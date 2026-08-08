@@ -12,9 +12,13 @@ import com.trading.marketsignalengine.application.domain.rule.CompositeSignalRul
 import com.trading.marketsignalengine.application.domain.rule.SignalRule;
 
 import java.math.BigDecimal;
+import java.time.Clock;
 import java.time.Instant;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
+import java.util.stream.Collectors;
 
 /**
  * Three-phase evaluation with hard short-circuits:
@@ -37,25 +41,28 @@ public class DefaultMarketSignalEngine implements MarketSignalEngine {
     private final CompositeSignalRule compositeSignalRule;
     private final SignalAggregator signalAggregator;
     private final SignalConfiguration signalConfiguration;
+    private final Clock clock;
 
     public DefaultMarketSignalEngine(List<SignalRule> qualityGateRules,
                                      List<SignalRule> tradabilityGateRules,
                                      List<SignalRule> directionalRules,
                                      CompositeSignalRule compositeSignalRule,
                                      SignalAggregator signalAggregator,
-                                     SignalConfiguration signalConfiguration) {
+                                     SignalConfiguration signalConfiguration,
+                                     Clock clock) {
         this.qualityGateRules = List.copyOf(qualityGateRules);
         this.tradabilityGateRules = List.copyOf(tradabilityGateRules);
         this.directionalRules = List.copyOf(directionalRules);
         this.compositeSignalRule = compositeSignalRule;
         this.signalAggregator = signalAggregator;
         this.signalConfiguration = signalConfiguration;
+        this.clock = clock;
     }
 
     @Override
     public MarketSignalSnapshot evaluate(MarketFeaturesSnapshot features) {
 
-        SignalEvaluationContext context = new SignalEvaluationContext(features, signalConfiguration, Instant.now());
+        SignalEvaluationContext context = new SignalEvaluationContext(features, signalConfiguration, Instant.now(clock));
 
         List<MarketSignal> signals = new ArrayList<>();
 
@@ -71,8 +78,13 @@ public class DefaultMarketSignalEngine implements MarketSignalEngine {
             return aggregateNoTrade(context, signals);
         }
 
-        // Phase 3: directional rules + composite setups, on tradable data only.
+        // Phase 3: directional rules + composite setups, on tradable data only. A directional rule can
+        // still emit RISK_OFF on a semantically-invalid feature value (out-of-range imbalance, negative
+        // trade count, invalid order book); in that case no composite setup must be formed on garbage.
         evaluateInto(directionalRules, context, signals);
+        if (hasNoTrade(signals)) {
+            return aggregateNoTrade(context, signals);
+        }
         signals.addAll(compositeSignalRule.evaluate(context, signals));
 
         return signalAggregator.aggregate(context, signals);
@@ -89,7 +101,7 @@ public class DefaultMarketSignalEngine implements MarketSignalEngine {
     private MarketSignalSnapshot aggregateNoTrade(SignalEvaluationContext context,
                                                   List<MarketSignal> gateSignals) {
         List<MarketSignal> signals = new ArrayList<>(gateSignals);
-        signals.add(noTradeCondition());
+        signals.add(noTradeCondition(gateSignals));
         return signalAggregator.aggregate(context, signals);
     }
 
@@ -101,12 +113,25 @@ public class DefaultMarketSignalEngine implements MarketSignalEngine {
         return signals.stream().anyMatch(signal -> signal.direction() == SignalDirection.RISK_OFF);
     }
 
-    private static MarketSignal noTradeCondition() {
+    private static MarketSignal noTradeCondition(List<MarketSignal> gateSignals) {
+        Map<String, String> attributes = new LinkedHashMap<>();
+        attributes.put("condition", "NO_TRADE");
+        attributes.put("reason", "ONE_OR_MORE_RISK_OFF_SIGNALS_ACTIVE");
+        attributes.put("emittedBy", "DefaultMarketSignalEngine");
+
+        String riskOffSignals = gateSignals.stream()
+                .filter(signal -> signal.direction() == SignalDirection.RISK_OFF)
+                .map(signal -> signal.type().name())
+                .distinct()
+                .collect(Collectors.joining(","));
+
+        attributes.put("riskOffSignals", riskOffSignals);
+
         return MarketSignal.riskOff(
                 SignalType.NO_TRADE_CONDITION,
                 SignalStrength.EXTREME,
                 BigDecimal.ONE,
                 "One or more no-trade conditions are active",
-                null);
+                attributes);
     }
 }
