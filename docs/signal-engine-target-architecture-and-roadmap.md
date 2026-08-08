@@ -1141,6 +1141,11 @@ Opportunity є active тільки коли net edge перевищує versione
 
 ## 15. Порядок найближчих практичних робіт
 
+> **Актуальний операційний план:** [path-to-paper-trading.md](path-to-paper-trading.md)
+> (прийнято 2026-08-08). Він уточнює порядок нижче: replay harness переноситься на
+> початок (даталейк-джоба вже пише всі топіки), перший milestone — paper trading на
+> V1 контракті, рішення по топіку/volatility/quality зафіксовані в його §8.
+
 Перший реалізаційний backlog:
 
 1. Зафіксувати V6 baseline у логічних commits.
