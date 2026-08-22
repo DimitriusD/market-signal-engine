@@ -96,6 +96,25 @@ docker compose up -d
 | `APP_SIGNAL_RISK_OFF_TTL_MS` | `5000` | TTL of a risk-off snapshot |
 | `APP_SIGNAL_NEUTRAL_TTL_MS` | `1000` | TTL of a neutral snapshot |
 
+## Replay and golden tests
+
+The engine is stateless and deterministic, so the `application` module ships an in-process replay
+harness: `ReplayHarness.standard(config).replay(List<MarketFeaturesSnapshot>)` runs inputs through
+the **same** rule wiring production uses (`StandardSignalEngine`) and returns one
+`MarketSignalSnapshot` per input. Evaluation time is pinned to the input's `computedAt` (or a fixed
+instant), never to the wall clock, so the same input and config always give the same output.
+
+`ReplayGoldenTest` replays the synthetic fixtures in `GoldenFixtures` and compares the rendered
+output with `application/src/test/resources/golden/<case>.txt`. A golden mismatch means the
+engine's observable output changed:
+
+```bash
+# intended change: regenerate, review the diff, commit the golden update separately
+GOLDEN_UPDATE=true ./gradlew :application:test --tests "*ReplayGoldenTest"
+```
+
+Any golden change that alters semantics must come with a `signalSetVersion` bump.
+
 ## Tech stack
 
 - Java 21

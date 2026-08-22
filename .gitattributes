@@ -1,0 +1,2 @@
+# Golden replay files are compared byte-for-byte; keep LF on every platform.
+application/src/test/resources/golden/*.txt text eol=lf
