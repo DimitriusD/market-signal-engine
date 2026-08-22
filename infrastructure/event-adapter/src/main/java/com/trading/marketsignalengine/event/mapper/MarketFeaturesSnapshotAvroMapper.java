@@ -2,21 +2,36 @@ package com.trading.marketsignalengine.event.mapper;
 
 import com.trading.contracts.feature.BboFeaturesEvent;
 import com.trading.contracts.feature.BookFeaturesEvent;
+import com.trading.contracts.feature.DiagnosticsEvent;
 import com.trading.contracts.feature.FeatureQualityEvent;
+import com.trading.contracts.feature.FeatureSourceStateEvent;
 import com.trading.contracts.feature.MarketFeaturesSnapshotEvent;
 import com.trading.contracts.feature.ShortTermRegimeFeaturesEvent;
 import com.trading.contracts.feature.TradeFlowFeaturesEvent;
 import com.trading.contracts.orderbook.BookSyncStatus;
+import com.trading.marketsignalengine.application.domain.model.SyncStatus;
 import com.trading.marketsignalengine.application.domain.model.feature.BboFeature;
 import com.trading.marketsignalengine.application.domain.model.feature.BookFeature;
+import com.trading.marketsignalengine.application.domain.model.feature.FeatureDiagnostics;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureQuality;
+import com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus;
+import com.trading.marketsignalengine.application.domain.model.feature.FeatureSourceState;
 import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.feature.RegimeFeature;
-import com.trading.marketsignalengine.application.domain.model.SyncStatus;
 import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowFeature;
+import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowWindow;
 import java.math.BigDecimal;
 import java.time.Instant;
+import java.util.List;
 
+/**
+ * Avro → domain mapping of the full MFS v2 {@code MarketFeaturesSnapshotEvent}. Every contract field
+ * is mapped; nothing is silently dropped except the deprecated {@code shortTermVolatility1s} alias
+ * (superseded by {@code realizedVolatilityBps1s}). Null semantics are preserved: a {@code null} /
+ * blank upstream value stays {@code null} in the domain so rules fail closed instead of reading zero.
+ * A {@code 0} upstream {@code evaluationTs} (the schema default, i.e. a writer that predates the
+ * field) maps to {@code null}.
+ */
 public final class MarketFeaturesSnapshotAvroMapper {
 
     private MarketFeaturesSnapshotAvroMapper() {
@@ -43,8 +58,13 @@ public final class MarketFeaturesSnapshotAvroMapper {
                 .eventTime(instantFromEpochMillis(metadata.getExchangeTs()))
                 .receivedAt(instantFromEpochMillis(metadata.getReceivedTs()))
                 .computedAt(instantFromEpochMillis(event.getComputedTs()))
+                .evaluationTs(instantFromEpochMillisOrNull(event.getEvaluationTs()))
                 .featureSetVersion(event.getFeatureSetVersion())
+                .triggerSource(string(event.getTriggerSource()))
+                .configHash(string(event.getConfigHash()))
                 .quality(mapQuality(event.getQuality()))
+                .sourceState(mapSourceState(event.getSourceState()))
+                .diagnostics(mapDiagnostics(event.getDiagnostics()))
                 .bbo(mapBbo(event.getBbo()))
                 .book(mapBook(event.getBook()))
                 .tradeFlow(mapTradeFlow(event.getTradeFlow()))
@@ -63,6 +83,38 @@ public final class MarketFeaturesSnapshotAvroMapper {
                 .incompleteBook(quality.getIncompleteBook())
                 .orderBookStateAgeMs(quality.getOrderBookStateAgeMs())
                 .tradeAgeMs(quality.getTradeAgeMs())
+                .sourceOrderBookTrusted(quality.getSourceOrderBookTrusted())
+                .sourceOrderBookReason(
+                        quality.getSourceOrderBookReason() == null ? null : quality.getSourceOrderBookReason().name())
+                .status(mapQualityStatus(quality.getStatus()))
+                .qualityReasons(strings(quality.getQualityReasons()))
+                .futureEventDetected(quality.getFutureEventDetected())
+                .warmingUp(quality.getWarmingUp())
+                .build();
+    }
+
+    private static FeatureSourceState mapSourceState(FeatureSourceStateEvent sourceState) {
+        if (sourceState == null) {
+            return null;
+        }
+        return FeatureSourceState.builder()
+                .sourceOrderBookStateTs(instantFromEpochMillisOrNull(sourceState.getSourceOrderBookStateTs()))
+                .sourceOrderBookStateSeq(sourceState.getSourceOrderBookStateSeq())
+                .sourceOrderBookExchangeUpdateId(sourceState.getSourceOrderBookExchangeUpdateId())
+                .sourceOrderBookStateEventId(string(sourceState.getSourceOrderBookStateEventId()))
+                .sourceOrderBookProcessedTs(instantFromEpochMillisOrNull(sourceState.getSourceOrderBookProcessedTs()))
+                .sourceTradeTs(instantFromEpochMillisOrNull(sourceState.getSourceTradeTs()))
+                .publishedDepth(sourceState.getPublishedDepth())
+                .build();
+    }
+
+    private static FeatureDiagnostics mapDiagnostics(DiagnosticsEvent diagnostics) {
+        if (diagnostics == null) {
+            return null;
+        }
+        return FeatureDiagnostics.builder()
+                .failedFeatureGroups(strings(diagnostics.getFailedFeatureGroups()))
+                .totalFeatureGroups(diagnostics.getTotalFeatureGroups())
                 .build();
     }
 
@@ -98,32 +150,68 @@ public final class MarketFeaturesSnapshotAvroMapper {
                 .build();
     }
 
-    private static TradeFlowFeature mapTradeFlow(TradeFlowFeaturesEvent tradeFlow) {
-        if (tradeFlow == null) {
+    private static TradeFlowFeature mapTradeFlow(TradeFlowFeaturesEvent t) {
+        if (t == null) {
             return null;
         }
         return TradeFlowFeature.builder()
-                .lastTradePrice(decimal("tradeFlow.lastTradePrice", tradeFlow.getLastTradePrice()))
-
-                .buyAggressiveVolume1s(decimal("tradeFlow.buyAggressiveVolume1s", tradeFlow.getBuyAggressiveVolume1s()))
-                .sellAggressiveVolume1s(decimal("tradeFlow.sellAggressiveVolume1s", tradeFlow.getSellAggressiveVolume1s()))
-                .totalAggressiveVolume1s(decimal("tradeFlow.totalAggressiveVolume1s", tradeFlow.getTotalAggressiveVolume1s()))
-                .signedTradeFlow1s(decimal("tradeFlow.signedTradeFlow1s", tradeFlow.getSignedTradeFlow1s()))
-                .signedFlowImbalance1s(decimal("tradeFlow.signedFlowImbalance1s", tradeFlow.getSignedFlowImbalance1s()))
-                .tradeCount1s(tradeFlow.getTradeCount1s())
-                .tradeIntensity1s(decimal("tradeFlow.tradeIntensity1s", tradeFlow.getTradeIntensity1s()))
-                .avgTradeSize1s(decimal("tradeFlow.avgTradeSize1s", tradeFlow.getAvgTradeSize1s()))
-                .vwap1s(decimal("tradeFlow.vwap1s", tradeFlow.getVwap1s()))
-
-                .buyAggressiveVolume5s(decimal("tradeFlow.buyAggressiveVolume5s", tradeFlow.getBuyAggressiveVolume5s()))
-                .sellAggressiveVolume5s(decimal("tradeFlow.sellAggressiveVolume5s", tradeFlow.getSellAggressiveVolume5s()))
-                .totalAggressiveVolume5s(decimal("tradeFlow.totalAggressiveVolume5s", tradeFlow.getTotalAggressiveVolume5s()))
-                .signedTradeFlow5s(decimal("tradeFlow.signedTradeFlow5s", tradeFlow.getSignedTradeFlow5s()))
-                .signedFlowImbalance5s(decimal("tradeFlow.signedFlowImbalance5s", tradeFlow.getSignedFlowImbalance5s()))
-                .tradeCount5s(tradeFlow.getTradeCount5s())
-                .tradeIntensity5s(decimal("tradeFlow.tradeIntensity5s", tradeFlow.getTradeIntensity5s()))
-                .avgTradeSize5s(decimal("tradeFlow.avgTradeSize5s", tradeFlow.getAvgTradeSize5s()))
-                .vwap5s(decimal("tradeFlow.vwap5s", tradeFlow.getVwap5s()))
+                .lastTradePrice(decimal("tradeFlow.lastTradePrice", t.getLastTradePrice()))
+                .window1s(TradeFlowWindow.builder()
+                        .buyAggressiveVolume(decimal("tradeFlow.buyAggressiveVolume1s", t.getBuyAggressiveVolume1s()))
+                        .sellAggressiveVolume(decimal("tradeFlow.sellAggressiveVolume1s", t.getSellAggressiveVolume1s()))
+                        .totalAggressiveVolume(decimal("tradeFlow.totalAggressiveVolume1s", t.getTotalAggressiveVolume1s()))
+                        .signedTradeFlow(decimal("tradeFlow.signedTradeFlow1s", t.getSignedTradeFlow1s()))
+                        .signedFlowImbalance(decimal("tradeFlow.signedFlowImbalance1s", t.getSignedFlowImbalance1s()))
+                        .tradeCount(t.getTradeCount1s())
+                        .validQtyTradeCount(t.getValidQtyTradeCount1s())
+                        .aggressiveTradeCount(t.getAggressiveTradeCount1s())
+                        .unknownSideCount(t.getUnknownSideCount1s())
+                        .tradeIntensity(decimal("tradeFlow.tradeIntensity1s", t.getTradeIntensity1s()))
+                        .avgTradeSize(decimal("tradeFlow.avgTradeSize1s", t.getAvgTradeSize1s()))
+                        .vwap(decimal("tradeFlow.vwap1s", t.getVwap1s()))
+                        .build())
+                .window5s(TradeFlowWindow.builder()
+                        .buyAggressiveVolume(decimal("tradeFlow.buyAggressiveVolume5s", t.getBuyAggressiveVolume5s()))
+                        .sellAggressiveVolume(decimal("tradeFlow.sellAggressiveVolume5s", t.getSellAggressiveVolume5s()))
+                        .totalAggressiveVolume(decimal("tradeFlow.totalAggressiveVolume5s", t.getTotalAggressiveVolume5s()))
+                        .signedTradeFlow(decimal("tradeFlow.signedTradeFlow5s", t.getSignedTradeFlow5s()))
+                        .signedFlowImbalance(decimal("tradeFlow.signedFlowImbalance5s", t.getSignedFlowImbalance5s()))
+                        .tradeCount(t.getTradeCount5s())
+                        .validQtyTradeCount(t.getValidQtyTradeCount5s())
+                        .aggressiveTradeCount(t.getAggressiveTradeCount5s())
+                        .unknownSideCount(t.getUnknownSideCount5s())
+                        .tradeIntensity(decimal("tradeFlow.tradeIntensity5s", t.getTradeIntensity5s()))
+                        .avgTradeSize(decimal("tradeFlow.avgTradeSize5s", t.getAvgTradeSize5s()))
+                        .vwap(decimal("tradeFlow.vwap5s", t.getVwap5s()))
+                        .build())
+                .window15s(TradeFlowWindow.builder()
+                        .buyAggressiveVolume(decimal("tradeFlow.buyAggressiveVolume15s", t.getBuyAggressiveVolume15s()))
+                        .sellAggressiveVolume(decimal("tradeFlow.sellAggressiveVolume15s", t.getSellAggressiveVolume15s()))
+                        .totalAggressiveVolume(decimal("tradeFlow.totalAggressiveVolume15s", t.getTotalAggressiveVolume15s()))
+                        .signedTradeFlow(decimal("tradeFlow.signedTradeFlow15s", t.getSignedTradeFlow15s()))
+                        .signedFlowImbalance(decimal("tradeFlow.signedFlowImbalance15s", t.getSignedFlowImbalance15s()))
+                        .tradeCount(t.getTradeCount15s())
+                        .validQtyTradeCount(t.getValidQtyTradeCount15s())
+                        .aggressiveTradeCount(t.getAggressiveTradeCount15s())
+                        .unknownSideCount(t.getUnknownSideCount15s())
+                        .tradeIntensity(decimal("tradeFlow.tradeIntensity15s", t.getTradeIntensity15s()))
+                        .avgTradeSize(decimal("tradeFlow.avgTradeSize15s", t.getAvgTradeSize15s()))
+                        .vwap(decimal("tradeFlow.vwap15s", t.getVwap15s()))
+                        .build())
+                .window60s(TradeFlowWindow.builder()
+                        .buyAggressiveVolume(decimal("tradeFlow.buyAggressiveVolume60s", t.getBuyAggressiveVolume60s()))
+                        .sellAggressiveVolume(decimal("tradeFlow.sellAggressiveVolume60s", t.getSellAggressiveVolume60s()))
+                        .totalAggressiveVolume(decimal("tradeFlow.totalAggressiveVolume60s", t.getTotalAggressiveVolume60s()))
+                        .signedTradeFlow(decimal("tradeFlow.signedTradeFlow60s", t.getSignedTradeFlow60s()))
+                        .signedFlowImbalance(decimal("tradeFlow.signedFlowImbalance60s", t.getSignedFlowImbalance60s()))
+                        .tradeCount(t.getTradeCount60s())
+                        .validQtyTradeCount(t.getValidQtyTradeCount60s())
+                        .aggressiveTradeCount(t.getAggressiveTradeCount60s())
+                        .unknownSideCount(t.getUnknownSideCount60s())
+                        .tradeIntensity(decimal("tradeFlow.tradeIntensity60s", t.getTradeIntensity60s()))
+                        .avgTradeSize(decimal("tradeFlow.avgTradeSize60s", t.getAvgTradeSize60s()))
+                        .vwap(decimal("tradeFlow.vwap60s", t.getVwap60s()))
+                        .build())
                 .build();
     }
 
@@ -131,11 +219,22 @@ public final class MarketFeaturesSnapshotAvroMapper {
         if (regime == null) {
             return null;
         }
+        // shortTermVolatility1s is a deprecated alias and is intentionally not mapped.
         return RegimeFeature.builder()
                 .lastTradeDistanceToMidBps(
                         decimal("regime.lastTradeDistanceToMidBps", regime.getLastTradeDistanceToMidBps()))
                 .realizedVolatilityBps1s(
                         decimal("regime.realizedVolatilityBps1s", regime.getRealizedVolatilityBps1s()))
+                .realizedVolatilityBps5s(
+                        decimal("regime.realizedVolatilityBps5s", regime.getRealizedVolatilityBps5s()))
+                .realizedVolatilityBps15s(
+                        decimal("regime.realizedVolatilityBps15s", regime.getRealizedVolatilityBps15s()))
+                .realizedVolatilityBps60s(
+                        decimal("regime.realizedVolatilityBps60s", regime.getRealizedVolatilityBps60s()))
+                .priceChangeBps5s(decimal("regime.priceChangeBps5s", regime.getPriceChangeBps5s()))
+                .priceChangeBps15s(decimal("regime.priceChangeBps15s", regime.getPriceChangeBps15s()))
+                .priceChangeBps60s(decimal("regime.priceChangeBps60s", regime.getPriceChangeBps60s()))
+                .highLowRangeBps60s(decimal("regime.highLowRangeBps60s", regime.getHighLowRangeBps60s()))
                 .build();
     }
 
@@ -154,8 +253,27 @@ public final class MarketFeaturesSnapshotAvroMapper {
         }
     }
 
+    private static String string(CharSequence value) {
+        if (value == null) {
+            return null;
+        }
+        String text = value.toString();
+        return text.isBlank() ? null : text;
+    }
+
+    private static List<String> strings(List<? extends CharSequence> values) {
+        if (values == null || values.isEmpty()) {
+            return List.of();
+        }
+        return values.stream().map(CharSequence::toString).toList();
+    }
+
     private static Instant instantFromEpochMillis(long value) {
         return Instant.ofEpochMilli(value);
+    }
+
+    private static Instant instantFromEpochMillisOrNull(Long value) {
+        return value == null || value == 0L ? null : Instant.ofEpochMilli(value);
     }
 
     private static SyncStatus mapSyncStatus(BookSyncStatus syncStatus) {
@@ -168,6 +286,19 @@ public final class MarketFeaturesSnapshotAvroMapper {
             case OUT_OF_SYNC -> SyncStatus.OUT_OF_SYNC;
             case STALE -> SyncStatus.STALE;
             case UNKNOWN -> SyncStatus.UNKNOWN;
+        };
+    }
+
+    private static FeatureQualityStatus mapQualityStatus(
+            com.trading.contracts.feature.FeatureQualityStatus status) {
+        if (status == null) {
+            return null;
+        }
+        return switch (status) {
+            case OK -> FeatureQualityStatus.OK;
+            case DEGRADED -> FeatureQualityStatus.DEGRADED;
+            case UNSAFE -> FeatureQualityStatus.UNSAFE;
+            case NO_DATA -> FeatureQualityStatus.NO_DATA;
         };
     }
 }

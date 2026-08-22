@@ -316,8 +316,10 @@ class DefaultMarketSignalEngineTest {
         // Out-of-range imbalance is a Phase-3 RISK_OFF; no composite setup must form on garbage input.
         MarketFeaturesSnapshot features = SignalRuleTestSupport.tradableFeaturesBuilder()
                 .tradeFlow(TradeFlowFeature.builder()
-                        .signedFlowImbalance5s(new BigDecimal("1.42"))
-                        .tradeCount5s(50)
+                        .window5s(com.trading.marketsignalengine.application.domain.model.feature.TradeFlowWindow.builder()
+                                .signedFlowImbalance(new BigDecimal("1.42"))
+                                .tradeCount(50)
+                                .build())
                         .build())
                 .build();
 
