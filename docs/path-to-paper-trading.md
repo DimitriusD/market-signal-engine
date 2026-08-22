@@ -179,7 +179,12 @@ no-trade snapshot без directional evidence; build зелений; README ві
 **DoD 1a (у складі Блоку 2):** однаковий input/config дає однаковий semantic output; golden tests у CI.
 **DoD 1b (після paper):** будь-який день із даталейку відтворюється локально.
 
-### Блок 2. Повний MFS v2 input (roadmap Фаза 1)
+### Блок 2. Повний MFS v2 input (roadmap Фаза 1) — ✅ РЕАЛІЗОВАНО (гілка `block-2-mfs-v2-input`, 2026-08-22)
+
+Коміти: `b2b341a` (2.0 replay/golden), `6212e7e` (2.1–2.2 мапінг), `793f86a` (2.3 validator),
+`156c723` (2.4 quality gate → `mse-signals-v8`). 188 тестів зелені. Чекає review/merge у `master`.
+Зауваження: MFS публікує `featureSetVersion=mfs-features-v2` (не `mfs-core-v2` з Avro default) —
+саме це значення є дефолтом allowlist `APP_SIGNAL_SUPPORTED_FEATURE_SET_VERSIONS`.
 
 | # | Робота | Деталь |
 |---|---|---|
@@ -266,7 +271,7 @@ signal snapshot → feature snapshot → config версій.
 1. ~~Закрити питання 8.1–8.6~~ — зроблено 2026-08-08.
 2. ~~Оновити roadmap §15 посиланням на цей план~~ — зроблено.
 3. ~~Блок 0~~ — змержено 2026-08-22.
-4. Виконати Блоки **2 (з 2.0 = replay/golden) → 3 → 4 → 0.6 smoke → 5** послідовно;
+4. Виконати Блоки **~~2 (з 2.0 = replay/golden)~~ (реалізовано 2026-08-22, PR очікує) → 3 (лише звірка: 3.2 уже в 2.4) → 4 → 0.6 smoke → 5** послідовно;
    кожен блок — окрема гілка/PR зі своїм DoD. До запуску paper — перевірити, що
    `market.feature.snapshot.v1` записується в даталейк (§5 п.1).
 5. Після paper: Блок 1b (верифікація даталейку, loader, перша калібрація volatility-порога)
