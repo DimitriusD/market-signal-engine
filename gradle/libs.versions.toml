@@ -24,6 +24,8 @@ springBootStarter = { module = "org.springframework.boot:spring-boot-starter" }
 springBootStarterActuator = { module = "org.springframework.boot:spring-boot-starter-actuator" }
 springBootStarterValidation = { module = "org.springframework.boot:spring-boot-starter-validation" }
 springBootStarterTest = { module = "org.springframework.boot:spring-boot-starter-test" }
+springKafkaTest = { module = "org.springframework.kafka:spring-kafka-test" }
+micrometerCore = { module = "io.micrometer:micrometer-core" }
 
 schemas = { module = "com.trading:trading-schemas", version = "1.0.0-SNAPSHOT" }
 common = { module = "com.trading:trading-common", version = "1.0.0-SNAPSHOT" }

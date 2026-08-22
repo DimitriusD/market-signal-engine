@@ -214,14 +214,22 @@ no-trade snapshot без directional evidence; build зелений; README ві
 
 **DoD (paper-зріз):** null ніколи не стає neutral zero; причини no-trade видимі downstream.
 
-### Блок 4. Production hardening мінімум для paper (roadmap Фаза 11, зріз)
+### Блок 4. Production hardening мінімум для paper (roadmap Фаза 11, зріз) — ✅ РЕАЛІЗОВАНО (гілка `block-4-hardening`, 2026-08-22)
+
+Коміт `f63c3d0`; 203 тести зелені. Kafka-інтеграційні тести — на in-JVM `EmbeddedKafka` (KRaft) +
+`mock://` Schema Registry, без Docker. Побічна знахідка: jar `trading-schemas` у mavenLocal (від
+2026-08-02) мав вбудовану в `MarketFeaturesSnapshotEvent` схему з лічильниками 15s/60s як non-null
+`int` (default 0) всупереч `.avsc` (`["null","int"]`) — причина: застарілий project-level `.gradle/`
+кеш у `trading-schemas`, який псував генерацію навіть після `clean`/`--rerun-tasks`. Виправлено
+2026-08-22: `.gradle` видалено, jar перепубліковано (тепер nullable). **MFS треба перезібрати проти
+нового jar перед e2e smoke (0.6)** — інакше продюсер і consumer матимуть різні writer-схеми.
 
 | # | Робота | Деталь |
 |---|---|---|
-| 4.1 | Publisher timeout | Bounded `send()` замість нескінченного `join()` |
-| 4.2 | Listener через Boot configurer | `spring.kafka.listener.*` працюють |
-| 4.3 | Spring context test + Kafka integration tests | consume→evaluate→publish, DLT, duplicate input |
-| 4.4 | Метрики | input age, evaluation/publish latency, e2e latency, eligibility/no-trade причини, DLT counts |
+| 4.1 | Publisher timeout | `send().get(timeout)` + cancel; `SignalPublishException` → retry → DLT; `APP_KAFKA_PUBLISH_TIMEOUT_MS=5000`, producer `acks=all`, bounded delivery/request timeouts |
+| 4.2 | Listener через Boot configurer | `ConcurrentKafkaListenerContainerFactoryConfigurer` → `spring.kafka.listener.*` (concurrency/ack-mode/poll-timeout/auto-startup) діють; `app.kafka.retry.*` |
+| 4.3 | Spring context test + Kafka integration tests | `ApplicationContextTest` (властивості доходять до контейнера) + `KafkaEndToEndTest`: live MFS v2 → signal з lineage; дублікат → той самий `signalSnapshotId`; невідома `featureSetVersion` → `<input>.DLT` + метрика |
+| 4.4 | Метрики | `SignalMetricsPort` у core; Micrometer: `mse.snapshots{riskLevel,marketBias,setupSide}`, `mse.no_trade.reasons{type}`, `mse.input.age`, `mse.evaluate.duration`, `mse.publish.duration{outcome}`, `mse.e2e.latency`, `mse.consume.retries` / `mse.dlt.records` / `mse.dlt.failures{topic,exception}` |
 
 **DoD:** broker/registry outage має bounded behavior; duplicate input → stable ID;
 метрики відповідають на «чому не було сигналу».
@@ -271,7 +279,7 @@ signal snapshot → feature snapshot → config версій.
 1. ~~Закрити питання 8.1–8.6~~ — зроблено 2026-08-08.
 2. ~~Оновити roadmap §15 посиланням на цей план~~ — зроблено.
 3. ~~Блок 0~~ — змержено 2026-08-22.
-4. Виконати Блоки **~~2 (з 2.0 = replay/golden)~~ (реалізовано 2026-08-22, PR очікує) → 3 (лише звірка: 3.2 уже в 2.4) → 4 → 0.6 smoke → 5** послідовно;
+4. Виконати Блоки **~~2~~ (змержено PR #2) → ~~3~~ (3.2 у 2.4) → ~~4~~ (реалізовано 2026-08-22 на `block-4-hardening`, PR очікує) → 0.6 smoke → 5** послідовно;
    кожен блок — окрема гілка/PR зі своїм DoD. До запуску paper — перевірити, що
    `market.feature.snapshot.v1` записується в даталейк (§5 п.1).
 5. Після paper: Блок 1b (верифікація даталейку, loader, перша калібрація volatility-порога)

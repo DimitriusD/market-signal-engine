@@ -12,8 +12,21 @@ spring:
     consumer:
       group-id: ${APP_KAFKA_CONSUMER_GROUP_ID:market-signal-engine}
       key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      auto-offset-reset: ${APP_KAFKA_CONSUMER_AUTO_OFFSET_RESET:latest}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      acks: ${APP_KAFKA_PRODUCER_ACKS:all}
+      properties:
+        # Bounds the time a single send can spend inside the producer; the publisher additionally
+        # bounds the wait on the consumer thread (app.kafka.publish-timeout-ms).
+        delivery.timeout.ms: ${APP_KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS:10000}
+        request.timeout.ms: ${APP_KAFKA_PRODUCER_REQUEST_TIMEOUT_MS:5000}
+    # Applied through Boot's ConcurrentKafkaListenerContainerFactoryConfigurer (see KafkaConfiguration).
+    listener:
+      concurrency: ${APP_KAFKA_LISTENER_CONCURRENCY:1}
+      ack-mode: ${APP_KAFKA_LISTENER_ACK_MODE:batch}
+      poll-timeout: ${APP_KAFKA_LISTENER_POLL_TIMEOUT_MS:1000}
+      auto-startup: ${APP_KAFKA_LISTENER_AUTO_STARTUP:true}
 
 app:
   kafka:
@@ -22,6 +35,12 @@ app:
     topic:
       market-features: ${APP_KAFKA_TOPIC_MARKET_FEATURES:market.feature.snapshot.v1}
       market-signals: ${APP_KAFKA_TOPIC_MARKET_SIGNALS:state.market.signals.v1}
+    # Max time the consumer thread waits for the output broker ack before the send is cancelled and
+    # the input record goes through retry -> DLT. Never unbounded.
+    publish-timeout-ms: ${APP_KAFKA_PUBLISH_TIMEOUT_MS:5000}
+    retry:
+      backoff-ms: ${APP_KAFKA_RETRY_BACKOFF_MS:1000}
+      max-attempts: ${APP_KAFKA_RETRY_MAX_ATTEMPTS:3}
 
   signal:
     signal-set-version: ${APP_SIGNAL_SET_VERSION:mse-signals-v8}

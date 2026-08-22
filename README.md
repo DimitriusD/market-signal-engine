@@ -96,6 +96,61 @@ docker compose up -d
 | `APP_SIGNAL_RISK_OFF_TTL_MS` | `5000` | TTL of a risk-off snapshot |
 | `APP_SIGNAL_NEUTRAL_TTL_MS` | `1000` | TTL of a neutral snapshot |
 | `APP_SIGNAL_SUPPORTED_FEATURE_SET_VERSIONS` | `mfs-features-v2` | Comma-separated allowlist of upstream `featureSetVersion`; any other version fails closed to the DLT |
+| `APP_KAFKA_PUBLISH_TIMEOUT_MS` | `5000` | Max wait for the output broker ack; on timeout the send is cancelled and the input goes through retry → DLT |
+| `APP_KAFKA_RETRY_BACKOFF_MS` / `APP_KAFKA_RETRY_MAX_ATTEMPTS` | `1000` / `3` | Listener retry policy before dead-lettering to `<input>.DLT` (mapping/contract errors are not retried) |
+| `APP_KAFKA_LISTENER_CONCURRENCY` / `_ACK_MODE` / `_POLL_TIMEOUT_MS` / `_AUTO_STARTUP` | `1` / `batch` / `1000` / `true` | `spring.kafka.listener.*`, applied through Boot's container-factory configurer |
+| `APP_KAFKA_PRODUCER_ACKS` / `_DELIVERY_TIMEOUT_MS` / `_REQUEST_TIMEOUT_MS` | `all` / `10000` / `5000` | Output producer durability and bounded in-producer timeouts |
+| `APP_KAFKA_CONSUMER_AUTO_OFFSET_RESET` | `latest` | Offset reset for a new consumer group |
+
+## Operations: bounded failure and metrics
+
+- **Publish is bounded.** `MarketSignalSnapshotPublisher` waits at most `APP_KAFKA_PUBLISH_TIMEOUT_MS` for the ack, then cancels the send and throws; the input record is retried with back-off and finally dead-lettered. The consumer thread never hangs on a slow broker.
+- **Input failures go to `<input>.DLT`.** `AvroMappingException` and `InvalidMarketFeaturesSnapshotException` (unsupported `featureSetVersion`, missing identity) are not retried.
+- **Duplicate input is idempotent downstream:** the same feature snapshot always yields the same `signalSnapshotId`.
+- **Metrics** (Micrometer via actuator `/actuator/metrics`):
+
+| Metric | Tags | Meaning |
+|---|---|---|
+| `mse.snapshots` | `riskLevel`, `marketBias`, `setupSide` | Snapshots produced |
+| `mse.no_trade.reasons` | `type` | RISK_OFF signal types behind no-trade snapshots |
+| `mse.input.age` | — | evaluatedAt − exchange event time (ms) |
+| `mse.evaluate.duration` | — | validate + evaluate |
+| `mse.publish.duration` | `outcome=ok\|failed` | time to broker ack |
+| `mse.e2e.latency` | — | publish ack − exchange event time (ms) |
+| `mse.consume.retries`, `mse.dlt.records`, `mse.dlt.failures` | `topic`, `exception` | listener retries, dead-lettered records, DLT publish failures |
+
+Integration tests (`infrastructure/app`) run on an in-JVM `EmbeddedKafka` (KRaft) with a `mock://` Schema Registry — no Docker needed.
+| `APP_KAFKA_PUBLISH_TIMEOUT_MS` | `5000` | Max wait for the output broker ack on the consumer thread; on timeout the send is cancelled and the input goes through retry → DLT |
+| `APP_KAFKA_RETRY_BACKOFF_MS` / `APP_KAFKA_RETRY_MAX_ATTEMPTS` | `1000` / `3` | Listener retry policy before dead-lettering to `<input-topic>.DLT` (mapping/contract failures skip retries) |
+| `APP_KAFKA_LISTENER_CONCURRENCY` / `..._ACK_MODE` / `..._POLL_TIMEOUT_MS` / `..._AUTO_STARTUP` | `1` / `batch` / `1000` / `true` | Standard `spring.kafka.listener.*`, applied through Boot's container factory configurer |
+| `APP_KAFKA_PRODUCER_ACKS` / `..._DELIVERY_TIMEOUT_MS` / `..._REQUEST_TIMEOUT_MS` | `all` / `10000` / `5000` | Output producer durability and in-producer time bounds |
+| `APP_KAFKA_CONSUMER_AUTO_OFFSET_RESET` | `latest` | Where a new consumer group starts |
+
+## Failure behaviour and metrics
+
+Every failure path is bounded: a slow broker cannot block the consumer thread past
+`APP_KAFKA_PUBLISH_TIMEOUT_MS`; a failed publish is retried with back-off and then the input record is
+dead-lettered; Avro mapping errors and contract violations (blank identity, unsupported
+`featureSetVersion`) are non-retryable and go straight to `<input-topic>.DLT`. Input offsets are only
+committed after the output is acknowledged (at-least-once; duplicates carry the same deterministic
+`signalSnapshotId`).
+
+Micrometer metrics (actuator `/actuator/metrics/<name>`):
+
+| Metric | Tags | Meaning |
+|---|---|---|
+| `mse.snapshots` | `riskLevel`, `marketBias`, `setupSide` | Snapshots produced, by outcome |
+| `mse.no_trade.reasons` | `type` | RISK_OFF signal types behind no-trade snapshots |
+| `mse.input.age` | – | evaluatedAt − exchange event time (ms) |
+| `mse.evaluate.duration` | – | validate + evaluate time |
+| `mse.publish.duration` | `outcome=ok\|failed` | time to output broker ack |
+| `mse.e2e.latency` | – | publish ack − exchange event time (ms) |
+| `mse.consume.retries` / `mse.dlt.records` / `mse.dlt.failures` | `topic`, `exception` | listener retries, dead-lettered records, DLT publish failures |
+
+Integration tests (`infrastructure/app`) run on an in-JVM `EmbeddedKafka` (KRaft) with a `mock://`
+Schema Registry — no Docker needed: consume → evaluate → publish, duplicate input → same id,
+unsupported contract → DLT, plus a full Spring context test that checks `spring.kafka.listener.*`
+really reach the container.
 
 ## Replay and golden tests
 

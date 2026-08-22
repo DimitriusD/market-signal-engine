@@ -4,6 +4,7 @@ import com.trading.contracts.feature.MarketFeaturesSnapshotEvent;
 import com.trading.contracts.signal.MarketSignalSnapshotEvent;
 import com.trading.marketsignalengine.application.domain.validation.InvalidMarketFeaturesSnapshotException;
 import com.trading.marketsignalengine.event.mapper.AvroMappingException;
+import com.trading.marketsignalengine.event.metrics.DeadLetterMetrics;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
@@ -16,6 +17,7 @@ import org.apache.kafka.common.TopicPartition;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.boot.autoconfigure.kafka.ConcurrentKafkaListenerContainerFactoryConfigurer;
 import org.springframework.boot.autoconfigure.kafka.KafkaProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -31,6 +33,15 @@ import org.springframework.kafka.listener.DefaultErrorHandler;
 import org.springframework.kafka.support.serializer.ErrorHandlingDeserializer;
 import org.springframework.util.backoff.FixedBackOff;
 
+/**
+ * Kafka wiring. The listener container factory is built through Spring Boot's
+ * {@link ConcurrentKafkaListenerContainerFactoryConfigurer}, so every {@code spring.kafka.listener.*}
+ * property (concurrency, ack-mode, poll-timeout, auto-startup, idle events, ...) applies exactly as
+ * documented by Boot instead of being silently ignored by a hand-assembled factory. Error handling:
+ * bounded retries with fixed back-off, then dead-letter to {@code <topic>.DLT}; mapping/contract
+ * failures are non-retryable and go straight to the DLT. Every recovered (dead-lettered) record is
+ * counted via {@link DeadLetterMetrics}.
+ */
 @Configuration
 public class KafkaConfiguration {
 
@@ -68,14 +79,19 @@ public class KafkaConfiguration {
     }
 
     @Bean
-    public CommonErrorHandler kafkaErrorHandler(KafkaTemplate<String, Object> dltKafkaTemplate) {
+    public CommonErrorHandler kafkaErrorHandler(
+            KafkaTemplate<String, Object> dltKafkaTemplate,
+            DeadLetterMetrics deadLetterMetrics,
+            @Value("${app.kafka.retry.backoff-ms:1000}") long retryBackoffMs,
+            @Value("${app.kafka.retry.max-attempts:3}") long retryMaxAttempts) {
         var recoverer = new DeadLetterPublishingRecoverer(
                 dltKafkaTemplate, (message, ex) -> new TopicPartition(message.topic() + ".DLT", -1));
 
-        var errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(1_000L, 3L));
+        var errorHandler = new DefaultErrorHandler(recoverer, new FixedBackOff(retryBackoffMs, retryMaxAttempts));
         errorHandler.addNotRetryableExceptions(
                 AvroMappingException.class,
                 InvalidMarketFeaturesSnapshotException.class);
+        errorHandler.setRetryListeners(deadLetterMetrics);
         return errorHandler;
     }
 
@@ -87,12 +103,18 @@ public class KafkaConfiguration {
     }
 
     @Bean
+    @SuppressWarnings("unchecked")
     public ConcurrentKafkaListenerContainerFactory<String, MarketFeaturesSnapshotEvent>
             marketFeaturesKafkaListenerContainerFactory(
+                    ConcurrentKafkaListenerContainerFactoryConfigurer configurer,
                     ConsumerFactory<String, MarketFeaturesSnapshotEvent> marketFeaturesConsumerFactory,
                     CommonErrorHandler kafkaErrorHandler) {
         var factory = new ConcurrentKafkaListenerContainerFactory<String, MarketFeaturesSnapshotEvent>();
-        factory.setConsumerFactory(marketFeaturesConsumerFactory);
+        // Applies spring.kafka.listener.* (concurrency, ack-mode, poll-timeout, auto-startup, ...).
+        // Boot's configurer is typed <Object, Object>; the cast is safe, it only sets container props.
+        configurer.configure(
+                (ConcurrentKafkaListenerContainerFactory<Object, Object>) (ConcurrentKafkaListenerContainerFactory<?, ?>) factory,
+                (ConsumerFactory<Object, Object>) (ConsumerFactory<?, ?>) marketFeaturesConsumerFactory);
         factory.setCommonErrorHandler(kafkaErrorHandler);
         return factory;
     }

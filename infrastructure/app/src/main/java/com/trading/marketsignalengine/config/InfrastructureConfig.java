@@ -6,6 +6,7 @@ import com.trading.marketsignalengine.application.domain.service.StandardSignalE
 import com.trading.marketsignalengine.application.domain.validation.MarketFeaturesSnapshotValidator;
 import com.trading.marketsignalengine.application.port.input.MarketFeaturesHandler;
 import com.trading.marketsignalengine.application.port.output.MarketSignalSnapshotPublisherPort;
+import com.trading.marketsignalengine.application.port.output.SignalMetricsPort;
 import com.trading.marketsignalengine.application.service.MarketSignalHandleService;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
@@ -66,8 +67,9 @@ public class InfrastructureConfig {
     public MarketFeaturesHandler marketFeatureHandler(
             MarketSignalEngine marketSignalEngine,
             MarketSignalSnapshotPublisherPort publisher,
-            MarketFeaturesSnapshotValidator validator) {
-        return new MarketSignalHandleService(marketSignalEngine, publisher, validator);
+            MarketFeaturesSnapshotValidator validator,
+            SignalMetricsPort metrics) {
+        return new MarketSignalHandleService(marketSignalEngine, publisher, validator, metrics);
     }
 
     private static String defaultString(String value, String fallback) {
