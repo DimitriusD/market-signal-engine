@@ -24,7 +24,7 @@ app:
       market-signals: ${APP_KAFKA_TOPIC_MARKET_SIGNALS:state.market.signals.v1}
 
   signal:
-    signal-set-version: ${APP_SIGNAL_SET_VERSION:mse-signals-v7}
+    signal-set-version: ${APP_SIGNAL_SET_VERSION:mse-signals-v8}
     max-spread-bps: ${APP_SIGNAL_MAX_SPREAD_BPS:2.0}
     buy-flow-imbalance-5s-threshold: ${APP_SIGNAL_BUY_FLOW_IMBALANCE_5S_THRESHOLD:0.15}
     sell-flow-imbalance-5s-threshold: ${APP_SIGNAL_SELL_FLOW_IMBALANCE_5S_THRESHOLD:-0.15}

@@ -84,7 +84,7 @@ docker compose up -d
 | `APP_KAFKA_CONSUMER_GROUP_ID` | `market-signal-engine` | Kafka consumer group id |
 | `APP_KAFKA_TOPIC_MARKET_FEATURES` | `market.feature.snapshot.v1` | Input topic for feature snapshots |
 | `APP_KAFKA_TOPIC_MARKET_SIGNALS` | `state.market.signals.v1` | Output topic for signal snapshots |
-| `APP_SIGNAL_SET_VERSION` | `mse-signals-v7` | Signal set version label |
+| `APP_SIGNAL_SET_VERSION` | `mse-signals-v8` | Signal set version label |
 | `APP_SIGNAL_MAX_SPREAD_BPS` | `2.0` | Max acceptable spread in bps |
 | `APP_SIGNAL_BUY_FLOW_IMBALANCE_5S_THRESHOLD` | `0.15` | Buy pressure threshold for signedFlowImbalance5s |
 | `APP_SIGNAL_SELL_FLOW_IMBALANCE_5S_THRESHOLD` | `-0.15` | Sell pressure threshold for signedFlowImbalance5s |

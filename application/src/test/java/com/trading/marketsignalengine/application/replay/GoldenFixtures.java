@@ -3,7 +3,9 @@ package com.trading.marketsignalengine.application.replay;
 import com.trading.marketsignalengine.application.domain.model.SyncStatus;
 import com.trading.marketsignalengine.application.domain.model.feature.BboFeature;
 import com.trading.marketsignalengine.application.domain.model.feature.BookFeature;
+import com.trading.marketsignalengine.application.domain.model.feature.FeatureDiagnostics;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureQuality;
+import com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus;
 import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.feature.RegimeFeature;
 import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowFeature;
@@ -11,11 +13,12 @@ import com.trading.marketsignalengine.application.domain.model.feature.TradeFlow
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.LinkedHashMap;
+import java.util.List;
 import java.util.Map;
 
 /**
  * Synthetic, fully-specified input snapshots for the golden replay suite. Each case exercises one
- * distinct engine path on the default {@code mse-signals-v7} configuration. The map is ordered and
+ * distinct engine path on the default {@code mse-signals-v8} configuration. The map is ordered and
  * the key is the golden file name.
  *
  * <p>Inputs are deliberately hand-written (not generated) so that a golden diff points at a real
@@ -79,6 +82,10 @@ final class GoldenFixtures {
                         .incompleteBook(false)
                         .orderBookStateAgeMs(7_500L)
                         .tradeAgeMs(120L)
+                        .sourceOrderBookTrusted(true)
+                        .sourceOrderBookReason("NONE")
+                        .status(FeatureQualityStatus.DEGRADED)
+                        .qualityReasons(List.of("STALE_ORDER_BOOK"))
                         .build())
                 .build());
         cases.put("quality-out-of-sync-and-stale-trades", base("g-103")
@@ -89,6 +96,10 @@ final class GoldenFixtures {
                         .incompleteBook(false)
                         .orderBookStateAgeMs(300L)
                         .tradeAgeMs(9_000L)
+                        .sourceOrderBookTrusted(false)
+                        .sourceOrderBookReason("GAP_DETECTED")
+                        .status(FeatureQualityStatus.UNSAFE)
+                        .qualityReasons(List.of("BOOK_OUT_OF_SYNC", "STALE_TRADES"))
                         .build())
                 .build());
         cases.put("quality-recovering-incomplete", base("g-104")
@@ -99,6 +110,47 @@ final class GoldenFixtures {
                         .incompleteBook(true)
                         .orderBookStateAgeMs(50L)
                         .tradeAgeMs(80L)
+                        .sourceOrderBookTrusted(true)
+                        .sourceOrderBookReason("NONE")
+                        .status(FeatureQualityStatus.DEGRADED)
+                        .qualityReasons(List.of("INCOMPLETE_BOOK"))
+                        .build())
+                .build());
+        // Aggregate-status gate (mse-signals-v8): per-source flags clean, status alone decides.
+        cases.put("quality-degraded-warming-up", base("g-105")
+                .quality(tradableQuality().toBuilder()
+                        .status(FeatureQualityStatus.DEGRADED)
+                        .qualityReasons(List.of("WARMING_UP"))
+                        .warmingUp(true)
+                        .build())
+                .build());
+        cases.put("quality-degraded-calculator-failure", base("g-106")
+                .quality(tradableQuality().toBuilder()
+                        .status(FeatureQualityStatus.DEGRADED)
+                        .qualityReasons(List.of("CALCULATOR_FAILURE", "TRADE_HISTORY_GAP"))
+                        .build())
+                .diagnostics(FeatureDiagnostics.builder()
+                        .failedFeatureGroups(List.of("REGIME"))
+                        .totalFeatureGroups(6)
+                        .build())
+                .build());
+        cases.put("quality-unsafe-untrusted-book", base("g-107")
+                .quality(tradableQuality().toBuilder()
+                        .sourceOrderBookTrusted(false)
+                        .sourceOrderBookReason("CROSSED_BOOK")
+                        .status(FeatureQualityStatus.UNSAFE)
+                        .qualityReasons(List.of("BOOK_UNTRUSTED"))
+                        .build())
+                .build());
+        cases.put("quality-no-data", base("g-108")
+                .quality(tradableQuality().toBuilder()
+                        .status(FeatureQualityStatus.NO_DATA)
+                        .qualityReasons(List.of("NO_MARKET_DATA"))
+                        .build())
+                .build());
+        cases.put("quality-status-missing", base("g-109")
+                .quality(tradableQuality().toBuilder()
+                        .status(null)
                         .build())
                 .build());
 
@@ -175,6 +227,12 @@ final class GoldenFixtures {
                 .incompleteBook(false)
                 .orderBookStateAgeMs(40L)
                 .tradeAgeMs(90L)
+                .sourceOrderBookTrusted(true)
+                .sourceOrderBookReason("NONE")
+                .status(FeatureQualityStatus.OK)
+                .qualityReasons(List.of())
+                .futureEventDetected(false)
+                .warmingUp(false)
                 .build();
     }
 

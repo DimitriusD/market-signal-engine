@@ -381,6 +381,31 @@ class DefaultMarketSignalEngineTest {
         assertTrue(noTrade.attributes().get("riskOffSignals").contains(SignalType.SPREAD_TOO_WIDE.name()));
     }
 
+    @Test
+    void degradedAggregateStatusBlocksEvenWhenPerSourceFlagsAreClean() {
+        // mse-signals-v8 / decision 8.4: DEGRADED (here: 60s warm-up) is a hard block during paper.
+        // All directional data that would otherwise form a LONG setup is present and must not leak.
+        MarketFeaturesSnapshot features = SignalRuleTestSupport.tradableFeaturesBuilder()
+                .quality(SignalRuleTestSupport.tradableQuality().toBuilder()
+                        .status(com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus.DEGRADED)
+                        .qualityReasons(List.of("WARMING_UP"))
+                        .warmingUp(true)
+                        .build())
+                .build();
+
+        MarketSignalSnapshot snapshot = engine.evaluate(features);
+
+        assertEquals(MarketBias.RISK_OFF, snapshot.marketBias());
+        assertEquals(RiskLevel.NO_TRADE, snapshot.riskLevel());
+        assertEquals(SetupSide.NONE, snapshot.setup().side());
+        assertTrue(has(snapshot, SignalType.NO_TRADE_QUALITY_DEGRADED));
+        assertEquals(1, count(snapshot, SignalType.NO_TRADE_CONDITION));
+        assertFalse(has(snapshot, SignalType.DATA_TRADABLE));
+        assertFalse(has(snapshot, SignalType.SPREAD_ACCEPTABLE));
+        assertFalse(has(snapshot, SignalType.BUY_PRESSURE));
+        assertFalse(has(snapshot, SignalType.LONG_SETUP_FORMING));
+    }
+
     private static boolean has(MarketSignalSnapshot snapshot, SignalType type) {
         return snapshot.signals().stream().anyMatch(signal -> signal.type() == type);
     }

@@ -24,7 +24,7 @@ public class InfrastructureConfig {
     @Bean
     public SignalConfiguration signalConfiguration(SignalProperties properties) {
         return SignalConfiguration.builder()
-                .signalSetVersion(defaultString(properties.getSignalSetVersion(), "mse-signals-v7"))
+                .signalSetVersion(defaultString(properties.getSignalSetVersion(), "mse-signals-v8"))
                 .maxSpreadBps(defaultDecimal(properties.getMaxSpreadBps(), "2.0"))
                 .buyFlowImbalance5sThreshold(defaultDecimal(properties.getBuyFlowImbalance5sThreshold(), "0.15"))
                 .sellFlowImbalance5sThreshold(defaultDecimal(properties.getSellFlowImbalance5sThreshold(), "-0.15"))

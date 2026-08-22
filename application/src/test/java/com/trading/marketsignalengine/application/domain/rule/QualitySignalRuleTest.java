@@ -5,6 +5,7 @@ import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureQuality;
+import com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus;
 import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.MarketSignal;
 import com.trading.marketsignalengine.application.domain.model.SignalType;
@@ -204,6 +205,110 @@ class QualitySignalRuleTest {
         assertEquals("false", signal.attributes().get("staleOrderBookState"));
         assertEquals("false", signal.attributes().get("staleTrades"));
         assertEquals("false", signal.attributes().get("incompleteBook"));
+    }
+
+    // ------------------------------------------------------------ aggregate status gate (v8)
+
+    @Test
+    void degradedStatusWithCleanPerSourceFlagsIsNoTradeDegraded() {
+        // Decision 8.4: DEGRADED is a hard block for paper even when every per-source flag is clean
+        // (e.g. warm-up of the 60s window, failed calculator, trade-history gap).
+        FeatureQuality quality = cleanFlags()
+                .status(FeatureQualityStatus.DEGRADED)
+                .qualityReasons(List.of("WARMING_UP"))
+                .warmingUp(true)
+                .build();
+
+        List<MarketSignal> signals = rule.evaluate(SignalRuleTestSupport.context(SignalRuleTestSupport.withQuality(quality)));
+
+        assertEquals(1, signals.size());
+        MarketSignal signal = signals.getFirst();
+        assertEquals(SignalType.NO_TRADE_QUALITY_DEGRADED, signal.type());
+        assertEquals("QUALITY_STATUS_DEGRADED", signal.attributes().get("qualityReason"));
+        assertEquals("DEGRADED", signal.attributes().get("qualityStatus"));
+        assertEquals("WARMING_UP", signal.attributes().get("qualityReasons"));
+        assertEquals("true", signal.attributes().get("warmingUp"));
+        assertFalse(signals.stream().anyMatch(s -> s.type() == SignalType.DATA_TRADABLE));
+    }
+
+    @Test
+    void unsafeAndNoDataStatusAreNoTradeUnsafe() {
+        for (FeatureQualityStatus status : List.of(FeatureQualityStatus.UNSAFE, FeatureQualityStatus.NO_DATA)) {
+            FeatureQuality quality = cleanFlags()
+                    .status(status)
+                    .qualityReasons(List.of("BOOK_UNTRUSTED"))
+                    .sourceOrderBookTrusted(false)
+                    .sourceOrderBookReason("CROSSED_BOOK")
+                    .build();
+
+            List<MarketSignal> signals = rule.evaluate(SignalRuleTestSupport.context(SignalRuleTestSupport.withQuality(quality)));
+
+            assertEquals(1, signals.size(), status.name());
+            MarketSignal signal = signals.getFirst();
+            assertEquals(SignalType.NO_TRADE_QUALITY_UNSAFE, signal.type());
+            assertEquals("QUALITY_STATUS_" + status.name(), signal.attributes().get("qualityReason"));
+            assertEquals("BOOK_UNTRUSTED", signal.attributes().get("qualityReasons"));
+            assertEquals("false", signal.attributes().get("sourceOrderBookTrusted"));
+            assertEquals("CROSSED_BOOK", signal.attributes().get("sourceOrderBookReason"));
+        }
+    }
+
+    @Test
+    void missingStatusFailsClosedAsUnsafeNeverAsOk() {
+        FeatureQuality quality = cleanFlags().status(null).build();
+
+        List<MarketSignal> signals = rule.evaluate(SignalRuleTestSupport.context(SignalRuleTestSupport.withQuality(quality)));
+
+        assertEquals(1, signals.size());
+        assertEquals(SignalType.NO_TRADE_QUALITY_UNSAFE, signals.getFirst().type());
+        assertEquals("QUALITY_STATUS_MISSING", signals.getFirst().attributes().get("qualityReason"));
+        assertEquals("MISSING", signals.getFirst().attributes().get("qualityStatus"));
+    }
+
+    @Test
+    void degradedStatusAndStaleTradesEmitBothTypedReasons() {
+        FeatureQuality quality = cleanFlags()
+                .staleTrades(true)
+                .tradeAgeMs(7_000L)
+                .status(FeatureQualityStatus.DEGRADED)
+                .qualityReasons(List.of("STALE_TRADES"))
+                .build();
+
+        List<MarketSignal> signals = rule.evaluate(SignalRuleTestSupport.context(SignalRuleTestSupport.withQuality(quality)));
+
+        assertTrue(signals.stream().anyMatch(s -> s.type() == SignalType.NO_TRADE_STALE_TRADES));
+        assertTrue(signals.stream().anyMatch(s -> s.type() == SignalType.NO_TRADE_QUALITY_DEGRADED));
+        assertFalse(signals.stream().anyMatch(s -> s.type() == SignalType.DATA_TRADABLE));
+    }
+
+    @Test
+    void okStatusWithCleanFlagsIsTradableAndCarriesV2Attributes() {
+        FeatureQuality quality = cleanFlags()
+                .status(FeatureQualityStatus.OK)
+                .sourceOrderBookTrusted(true)
+                .sourceOrderBookReason("NONE")
+                .build();
+
+        List<MarketSignal> signals = rule.evaluate(SignalRuleTestSupport.context(SignalRuleTestSupport.withQuality(quality)));
+
+        assertEquals(1, signals.size());
+        MarketSignal signal = signals.getFirst();
+        assertEquals(SignalType.DATA_TRADABLE, signal.type());
+        assertEquals("OK", signal.attributes().get("qualityStatus"));
+        assertEquals("false", signal.attributes().get("warmingUp"));
+        assertEquals("false", signal.attributes().get("futureEventDetected"));
+        assertEquals("true", signal.attributes().get("sourceOrderBookTrusted"));
+        assertFalse(signal.attributes().containsKey("qualityReasons"));
+    }
+
+    private static FeatureQuality.FeatureQualityBuilder cleanFlags() {
+        return FeatureQuality.builder()
+                .syncStatus(SyncStatus.IN_SYNC)
+                .staleOrderBookState(false)
+                .staleTrades(false)
+                .incompleteBook(false)
+                .orderBookStateAgeMs(40L)
+                .tradeAgeMs(90L);
     }
 
     private static MarketSignal first(List<MarketSignal> signals, SignalType type) {

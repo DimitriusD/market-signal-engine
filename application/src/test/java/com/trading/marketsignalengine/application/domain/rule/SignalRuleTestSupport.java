@@ -84,6 +84,8 @@ public final class SignalRuleTestSupport {
                 .staleOrderBookState(false)
                 .staleTrades(false)
                 .incompleteBook(false)
+                .status(com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus.OK)
+                .sourceOrderBookTrusted(true)
                 .build();
     }
 }
