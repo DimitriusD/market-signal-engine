@@ -10,6 +10,7 @@ dependencies {
     implementation("org.springframework.boot:spring-boot-autoconfigure")
     implementation(libs.schemas)
     implementation(libs.kafkaAvroSerializer)
+    implementation(libs.micrometerCore)
 
     compileOnly(libs.lombok)
     annotationProcessor(libs.lombok)
