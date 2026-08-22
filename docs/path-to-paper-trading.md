@@ -217,10 +217,12 @@ no-trade snapshot без directional evidence; build зелений; README ві
 ### Блок 4. Production hardening мінімум для paper (roadmap Фаза 11, зріз) — ✅ РЕАЛІЗОВАНО (гілка `block-4-hardening`, 2026-08-22)
 
 Коміт `f63c3d0`; 203 тести зелені. Kafka-інтеграційні тести — на in-JVM `EmbeddedKafka` (KRaft) +
-`mock://` Schema Registry, без Docker. Знахідка по контракту: опублікований jar `trading-schemas`
-вбудовує в схему `MarketFeaturesSnapshotEvent` лічильники 15s/60s як non-null `int` (default 0),
-хоча компонентний `.avsc` каже `["null","int"]` — продюсер (MFS, тести) зобов'язаний їх задавати;
-engine читає обидва варіанти. Розбір — у пам'яті/звіті, не блокує paper.
+`mock://` Schema Registry, без Docker. Побічна знахідка: jar `trading-schemas` у mavenLocal (від
+2026-08-02) мав вбудовану в `MarketFeaturesSnapshotEvent` схему з лічильниками 15s/60s як non-null
+`int` (default 0) всупереч `.avsc` (`["null","int"]`) — причина: застарілий project-level `.gradle/`
+кеш у `trading-schemas`, який псував генерацію навіть після `clean`/`--rerun-tasks`. Виправлено
+2026-08-22: `.gradle` видалено, jar перепубліковано (тепер nullable). **MFS треба перезібрати проти
+нового jar перед e2e smoke (0.6)** — інакше продюсер і consumer матимуть різні writer-схеми.
 
 | # | Робота | Деталь |
 |---|---|---|

@@ -282,10 +282,10 @@ class KafkaEndToEndTest {
                         .setTradeCount1s(9).setSignedFlowImbalance1s("0.33")
                         .setTradeCount5s(50).setSignedFlowImbalance5s("0.70")
                         .setBuyAggressiveVolume5s("4.0").setSellAggressiveVolume5s("2.0")
-                        // The published trading-schemas jar embeds the 15s/60s counters as non-null
-                        // int (default 0) inside MarketFeaturesSnapshotEvent's schema even though the
-                        // component .avsc declares ["null","int"]; a producer must therefore set them
-                        // (MFS sends 0 while warming up). Kept explicit here so the test mirrors the wire.
+                        // 15s/60s counters are ["null","int"] in the contract; set explicitly so the
+                        // event is a complete, realistic MFS v2 snapshot (and stays serializable even
+                        // against a jar whose embedded schema declares them non-null — see
+                        // trading-schemas: a stale project .gradle cache once produced exactly that).
                         .setTradeCount15s(150).setValidQtyTradeCount15s(150)
                         .setAggressiveTradeCount15s(150).setUnknownSideCount15s(0)
                         .setTradeCount60s(600).setValidQtyTradeCount60s(600)
