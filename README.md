@@ -95,6 +95,7 @@ docker compose up -d
 | `APP_SIGNAL_MICROSTRUCTURE_SETUP_TTL_MS` | `2000` | TTL of a directional microstructure setup snapshot |
 | `APP_SIGNAL_RISK_OFF_TTL_MS` | `5000` | TTL of a risk-off snapshot |
 | `APP_SIGNAL_NEUTRAL_TTL_MS` | `1000` | TTL of a neutral snapshot |
+| `APP_SIGNAL_SUPPORTED_FEATURE_SET_VERSIONS` | `mfs-features-v2` | Comma-separated allowlist of upstream `featureSetVersion`; any other version fails closed to the DLT |
 
 ## Replay and golden tests
 

@@ -13,6 +13,9 @@ import org.springframework.context.annotation.Configuration;
 
 import java.math.BigDecimal;
 import java.time.Clock;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Set;
 
 @Configuration
 @EnableConfigurationProperties(SignalProperties.class)
@@ -51,8 +54,12 @@ public class InfrastructureConfig {
     }
 
     @Bean
-    public MarketFeaturesSnapshotValidator marketFeaturesSnapshotValidator() {
-        return new MarketFeaturesSnapshotValidator();
+    public MarketFeaturesSnapshotValidator marketFeaturesSnapshotValidator(SignalProperties properties) {
+        List<String> configured = properties.getSupportedFeatureSetVersions();
+        Set<String> supported = configured == null || configured.isEmpty()
+                ? Set.of("mfs-features-v2")
+                : new LinkedHashSet<>(configured);
+        return new MarketFeaturesSnapshotValidator(supported);
     }
 
     @Bean

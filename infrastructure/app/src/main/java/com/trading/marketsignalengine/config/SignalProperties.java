@@ -1,6 +1,7 @@
 package com.trading.marketsignalengine.config;
 
 import java.math.BigDecimal;
+import java.util.List;
 import lombok.Getter;
 import lombok.Setter;
 import org.springframework.boot.context.properties.ConfigurationProperties;
@@ -21,4 +22,6 @@ public class SignalProperties {
     private Long microstructureSetupTtlMs;
     private Long riskOffTtlMs;
     private Long neutralTtlMs;
+    /** Allowlist of upstream {@code featureSetVersion} values; anything else fails closed to the DLT. */
+    private List<String> supportedFeatureSetVersions;
 }
