@@ -9,6 +9,7 @@ import com.trading.marketsignalengine.application.domain.model.SignalConfigurati
 import com.trading.marketsignalengine.application.domain.model.SignalEvaluationContext;
 import com.trading.marketsignalengine.application.domain.model.SyncStatus;
 import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowFeature;
+import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowWindow;
 import java.math.BigDecimal;
 import java.time.Instant;
 
@@ -49,8 +50,10 @@ public final class SignalRuleTestSupport {
                 .bbo(BboFeature.builder().spreadBps(new BigDecimal("1.0")).build())
                 .book(BookFeature.builder().levelsUsed(5).top5Imbalance(new BigDecimal("0.70")).build())
                 .tradeFlow(TradeFlowFeature.builder()
-                        .signedFlowImbalance5s(new BigDecimal("0.70"))
-                        .tradeCount5s(50)
+                        .window5s(TradeFlowWindow.builder()
+                                .signedFlowImbalance(new BigDecimal("0.70"))
+                                .tradeCount(50)
+                                .build())
                         .build())
                 .regime(RegimeFeature.builder()
                         .realizedVolatilityBps1s(new BigDecimal("5.0"))
@@ -81,6 +84,8 @@ public final class SignalRuleTestSupport {
                 .staleOrderBookState(false)
                 .staleTrades(false)
                 .incompleteBook(false)
+                .status(com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus.OK)
+                .sourceOrderBookTrusted(true)
                 .build();
     }
 }

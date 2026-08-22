@@ -65,8 +65,13 @@ public class DefaultMarketSignalEngine implements MarketSignalEngine {
 
     @Override
     public MarketSignalSnapshot evaluate(MarketFeaturesSnapshot features) {
+        return evaluate(features, Instant.now(clock));
+    }
 
-        SignalEvaluationContext context = new SignalEvaluationContext(features, signalConfiguration, Instant.now(clock));
+    @Override
+    public MarketSignalSnapshot evaluate(MarketFeaturesSnapshot features, Instant evaluatedAt) {
+
+        SignalEvaluationContext context = new SignalEvaluationContext(features, signalConfiguration, evaluatedAt);
 
         List<MarketSignal> signals = new ArrayList<>();
 

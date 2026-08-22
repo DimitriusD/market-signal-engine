@@ -63,7 +63,7 @@ public record SignalConfiguration(
      */
     public static SignalConfiguration defaults() {
         return SignalConfiguration.builder()
-                .signalSetVersion("mse-signals-v7")
+                .signalSetVersion("mse-signals-v8")
                 .maxSpreadBps(new BigDecimal("2.0"))
                 .buyFlowImbalance5sThreshold(new BigDecimal("0.15"))
                 .sellFlowImbalance5sThreshold(new BigDecimal("-0.15"))

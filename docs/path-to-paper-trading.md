@@ -2,6 +2,10 @@
 
 **Статус:** прийнято (рішення §8 зафіксовані)
 **Дата:** 2026-08-08
+**Ревізія 2026-08-22:** Блок 0 змержено в `master` (PR #1, `mse-signals-v7`). Порядок робіт переглянуто:
+спочатку доводимо сервіси до paper-готовності (Блоки 2 → 3 → 4 → 5), робота з даталейком
+(верифікація, loader, калібрація) — після цього. In-repo replay harness і golden tests
+переносяться всередину Блоку 2 як його тестова інфраструктура. Деталі — §3 (Коригування A′), §6, §9.
 **Базовий документ:** [signal-engine-target-architecture-and-roadmap.md](signal-engine-target-architecture-and-roadmap.md)
 **Scope:** що саме і в якому порядку робимо, щоб дійти від поточного `mse-signals-v6` до працюючого paper trading
 
@@ -43,6 +47,30 @@ Engine уже stateless і детермінований, тому мінімал
 (`List<MarketFeaturesSnapshot> → List<MarketSignalSnapshot>`) дешевий уже зараз.
 Без нього Фази 4–6 (пороги, ваги, taxonomy) проєктуються наосліп.
 Кожен поріг, доданий після появи replay, калібрується на записаних даних, а не вигадується.
+
+### Коригування A′ (2026-08-22). Даталейк — після paper-готовності сервісів
+
+Переглянуто після завершення Блоку 0. Коригування A мотивувалось тим, що пороги/ваги
+Фаз 4–6 roadmap не можна проєктувати наосліп. Але paper-milestone ті фази свідомо не включає
+(рішення 8.3: V1 контракт як є), а єдиний некалібрований поріг — volatility — уже покритий
+рішенням 8.2 (щедрий placeholder з атрибутом `UNCALIBRATED`). Жодна робота Блоків 2–5 не
+вимагає реальних записаних даних: мапінг, eligibility, hardening і запуск ланцюга детерміновані
+або суто інженерні.
+
+Тому Блок 1 розділяється:
+
+- **1a (in-repo, без даталейку):** replay harness `List<MarketFeaturesSnapshot> → List<MarketSignalSnapshot>`
+  і golden tests на синтетичних фікстурах — виконуються **всередині Блоку 2** як його тестова
+  інфраструктура, *до* переписування mapper, щоб зміни semantics у Блоках 2–3 мали
+  регресійний захист;
+- **1b (даталейк):** верифікація fidelity (§5), loader, калібрація порогів — **після Блоку 5**,
+  разом із roadmap Фазою 8, коли накопичені і фічі, і paper-outcome.
+
+Єдиний виняток: перший пункт чекліста §5 («`market.feature.snapshot.v1` записується») треба
+*перевірити* (не будувати) до запуску paper — інакше кожен день живого MFS втрачається для
+майбутньої калібрації і для outcome capture (5.3). Станом на 2026-08-22 `market-history-service`
+пише в ClickHouse лише `canonical.market.trades.v1` і `canonical.market.depthdiff.v1`; чи існує
+інша джоба для feature-топіка — відкрите питання.
 
 ### Коригування B. Data flywheel вже частково існує
 
@@ -97,8 +125,9 @@ MFS v2 (live)
 2. published snapshot містить достатньо інформації, щоб paper-стратегія могла
    прийняти рішення і зафіксувати результат: bias/score, setup, validity, typed reasons,
    повний lineage;
-3. кожен published snapshot відтворюваний із даталейку через replay (bit-for-bit
-   semantic equality);
+3. кожен published snapshot відтворюваний in-process replay-ом з того самого feature snapshot
+   і config (bit-for-bit semantic equality, golden tests); відтворення *з даталейку* —
+   після paper (Коригування A′);
 4. відмови мають bounded behavior: DLT працює, publisher не висить нескінченно;
 5. є метрики, щоб відповісти «чому сигнал був/не був» без читання логів.
 
@@ -121,7 +150,10 @@ Paper trading **не вимагає**: V2 output contract, forecasts, opportunit
 
 ## 6. План блоків до paper trading
 
-### Блок 0. З'єднати сервіси і прибрати блокери → `mse-signals-v7`
+### Блок 0. З'єднати сервіси і прибрати блокери → `mse-signals-v7` — ✅ ЗАВЕРШЕНО
+
+Змержено в `master` 2026-08-22 (PR #1). 0.1–0.5 виконані; 0.6 (e2e smoke) свідомо відкладено —
+виконується перед Блоком 5, коли піднімається повний ланцюг.
 
 | # | Робота | Деталь |
 |---|---|---|
@@ -135,39 +167,52 @@ Paper trading **не вимагає**: V2 output contract, forecasts, opportunit
 **DoD:** живий MFS v2 snapshot проходить крізь engine без хибного RISK_OFF;
 no-trade snapshot без directional evidence; build зелений; README відповідає коду.
 
-### Блок 1. Replay поверх даталейку
+### Блок 1. Replay — розділено (Коригування A′)
+
+| # | Робота | Де виконується |
+|---|---|---|
+| 1.3 | Replay harness | `List<MarketFeaturesSnapshot> → List<MarketSignalSnapshot>`, in-process, в `application` модулі → **Блок 2, п. 2.0** |
+| 1.4 | Golden tests | Зафіксовані входи → зафіксовані виходи; регресійний захист для всіх наступних блоків → **Блок 2, п. 2.0** |
+| 1.1 | Верифікація даталейку | Чекліст розділу 5 → **після Блоку 5** (п.1 чекліста — перевірити до запуску paper) |
+| 1.2 | Loader | даталейк-формат → `MarketFeaturesSnapshot` → **після Блоку 5** |
+
+**DoD 1a (у складі Блоку 2):** однаковий input/config дає однаковий semantic output; golden tests у CI.
+**DoD 1b (після paper):** будь-який день із даталейку відтворюється локально.
+
+### Блок 2. Повний MFS v2 input (roadmap Фаза 1) — ✅ РЕАЛІЗОВАНО (гілка `block-2-mfs-v2-input`, 2026-08-22)
+
+Коміти: `b2b341a` (2.0 replay/golden), `6212e7e` (2.1–2.2 мапінг), `793f86a` (2.3 validator),
+`156c723` (2.4 quality gate → `mse-signals-v8`). 188 тестів зелені. Чекає review/merge у `master`.
+Зауваження: MFS публікує `featureSetVersion=mfs-features-v2` (не `mfs-core-v2` з Avro default) —
+саме це значення є дефолтом allowlist `APP_SIGNAL_SUPPORTED_FEATURE_SET_VERSIONS`.
 
 | # | Робота | Деталь |
 |---|---|---|
-| 1.1 | Верифікація даталейку | Чекліст розділу 5 |
-| 1.2 | Loader | даталейк-формат → `MarketFeaturesSnapshot` |
-| 1.3 | Replay harness | `List<MarketFeaturesSnapshot> → List<MarketSignalSnapshot>`, in-process, в `application` модулі |
-| 1.4 | Golden tests | Зафіксовані входи → зафіксовані виходи; регресійний захист для всіх наступних блоків |
-
-**DoD:** будь-який день із даталейку відтворюється локально; однаковий input/config
-дає однаковий semantic output; golden tests у CI.
-
-### Блок 2. Повний MFS v2 input (roadmap Фаза 1)
-
-| # | Робота | Деталь |
-|---|---|---|
+| 2.0 | Replay harness + golden tests | Колишні 1.3–1.4; робляться **першими**, на поточному `mse-signals-v7`, щоб зафіксувати baseline до змін mapper |
 | 2.1 | Мапінг усіх полів | quality `status`/`qualityReasons`/`warmingUp`/`futureEventDetected`, `evaluationTs`, `configHash`, `triggerSource`, `diagnostics`, 15s/60s trade flow, `realizedVolatilityBps*`, `priceChangeBps*`, `highLowRangeBps60s` |
 | 2.2 | Contract tests | Кожне нове поле + null semantics |
 | 2.3 | Compatibility validator | Невідома `featureSetVersion`/контракт → fail closed у DLT |
-| 2.4 | Quality gate на aggregate status | `UNSAFE`/`NO_DATA` → hard block; `DEGRADED` → політика (див. 8.4) |
+| 2.4 | Quality gate на aggregate status → `mse-signals-v8` | `UNSAFE`/`NO_DATA` → `NO_TRADE_QUALITY_UNSAFE`; `DEGRADED` → `NO_TRADE_QUALITY_DEGRADED` без винятків (8.4); `qualityStatus`/`qualityReasons` в `attributes` сигналу (колишнє 3.2). Legacy `isTradable()` лишається backstop-ом. Bump версії тут, не на 2.1 (мапінг не міняє вихід) |
 
-**DoD:** roadmap Фаза 1 DoD + жодне нове поле не «мовчазно ігнорується».
+**DoD:** roadmap Фаза 1 DoD + жодне нове поле не «мовчазно ігнорується» + golden tests
+зафіксовані до зміни mapper і оновлені свідомо (кожна зміна golden-виходу — окремий commit з поясненням).
 
 ### Блок 3. Мінімальні eligibility/assessments для paper (roadmap Фази 2–3, стиснуто)
 
-| # | Робота | Деталь |
-|---|---|---|
-| 3.1 | Per-horizon eligibility | `WARMING_UP` 60s не блокує 1s/5s; failed feature group блокує лише залежні оцінки |
-| 3.2 | Typed reasons | У published snapshot видно, чому горизонт ineligible |
-| 3.3 | Мінімальний taxonomy | Згідно з Коригуванням C |
+**Стиснуто 2026-08-22 для мінімального paper-шляху.** V1 контракт не має per-horizon полів,
+а engine читає лише 5s-вікно; тому 3.1 і 3.3 відкладаються до накопичення paper-даних, а 3.2
+виконується всередині п. 2.4 через `attributes` існуючого контракту. Факт для майбутнього
+перегляду: `WARMING_UP` у MFS — це 60 с після першого трейду інструмента (довжина найдовшого
+вікна), один раз на рестарт; hard block `DEGRADED` (8.4) фактично додає до вже наявних
+блокувань лише warm-up, `CALCULATOR_FAILURE`, `FUTURE_EVENT`, `TRADE_HISTORY_GAP`.
 
-**DoD:** null ніколи не стає neutral zero; короткі горизонти працюють під час warm-up;
-причини видимі downstream.
+| # | Робота | Статус |
+|---|---|---|
+| 3.1 | Per-horizon eligibility (`WARMING_UP` 60s не блокує 1s/5s; failed feature group блокує лише залежні оцінки) | **після paper** — суперечить 8.4 для paper-періоду |
+| 3.2 | Typed reasons у published snapshot | **→ п. 2.4** (`qualityStatus`, `qualityReasons` в `attributes`) |
+| 3.3 | Мінімальний taxonomy (Коригування C) | **після paper** — потребує V2 контракту |
+
+**DoD (paper-зріз):** null ніколи не стає neutral zero; причини no-trade видимі downstream.
 
 ### Блок 4. Production hardening мінімум для paper (roadmap Фаза 11, зріз)
 
@@ -224,5 +269,10 @@ signal snapshot → feature snapshot → config версій.
 ## 9. Порядок виконання
 
 1. ~~Закрити питання 8.1–8.6~~ — зроблено 2026-08-08.
-2. Оновити roadmap §15 посиланням на цей план (щоб не було двох джерел правди).
-3. Виконати Блоки 0 → 1 → 2 → 3 → 4 → 5 послідовно; кожен блок — окрема гілка/PR зі своїм DoD.
+2. ~~Оновити roadmap §15 посиланням на цей план~~ — зроблено.
+3. ~~Блок 0~~ — змержено 2026-08-22.
+4. Виконати Блоки **~~2 (з 2.0 = replay/golden)~~ (реалізовано 2026-08-22, PR очікує) → 3 (лише звірка: 3.2 уже в 2.4) → 4 → 0.6 smoke → 5** послідовно;
+   кожен блок — окрема гілка/PR зі своїм DoD. До запуску paper — перевірити, що
+   `market.feature.snapshot.v1` записується в даталейк (§5 п.1).
+5. Після paper: Блок 1b (верифікація даталейку, loader, перша калібрація volatility-порога)
+   → roadmap Фаза 8 і далі.

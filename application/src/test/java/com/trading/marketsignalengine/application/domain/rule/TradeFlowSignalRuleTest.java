@@ -9,6 +9,7 @@ import com.trading.marketsignalengine.application.domain.model.SignalConfigurati
 import com.trading.marketsignalengine.application.domain.model.SignalType;
 import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowFeature;
+import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowWindow;
 import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
@@ -29,14 +30,39 @@ class TradeFlowSignalRuleTest {
     }
 
     @Test
+    void missing5sWindowEmitsTradeFlowNeutral() {
+        MarketFeaturesSnapshot features = featuresWith(TradeFlowFeature.builder().build());
+
+        MarketSignal signal = evaluateFirst(features);
+
+        assertEquals(SignalType.TRADE_FLOW_NEUTRAL, signal.type());
+        assertEquals("TRADE_FLOW_5S_MISSING", signal.attributes().get("neutralReason"));
+    }
+
+    @Test
     void missingImbalanceEmitsTradeFlowNeutral() {
-        MarketFeaturesSnapshot features = featuresWith(
-                TradeFlowFeature.builder().tradeCount5s(50).build());
+        MarketFeaturesSnapshot features = featuresWith(TradeFlowFeature.builder()
+                .window5s(TradeFlowWindow.builder().tradeCount(50).build())
+                .build());
 
         MarketSignal signal = evaluateFirst(features);
 
         assertEquals(SignalType.TRADE_FLOW_NEUTRAL, signal.type());
         assertEquals("SIGNED_FLOW_IMBALANCE_5S_MISSING", signal.attributes().get("neutralReason"));
+    }
+
+    @Test
+    void missingTradeCountEmitsTradeFlowNeutralNotZeroCount() {
+        // A null 5s trade count is "unavailable", never "zero trades": the rule must not turn it into
+        // LOW_TRADE_COUNT_5S and must not emit pressure on it either.
+        MarketFeaturesSnapshot features = featuresWith(TradeFlowFeature.builder()
+                .window5s(TradeFlowWindow.builder().signedFlowImbalance(new BigDecimal("0.80")).build())
+                .build());
+
+        MarketSignal signal = evaluateFirst(features);
+
+        assertEquals(SignalType.TRADE_FLOW_NEUTRAL, signal.type());
+        assertEquals("TRADE_COUNT_5S_MISSING", signal.attributes().get("neutralReason"));
     }
 
     @Test
@@ -90,14 +116,22 @@ class TradeFlowSignalRuleTest {
     @Test
     void buyPressureContains1sAnd5sAttributes() {
         TradeFlowFeature tradeFlow = TradeFlowFeature.builder()
-                .signedFlowImbalance5s(new BigDecimal("0.30"))
-                .tradeCount5s(50)
-                .buyAggressiveVolume5s(new BigDecimal("100"))
-                .signedFlowImbalance1s(new BigDecimal("0.40"))
-                .tradeCount1s(12)
-                .buyAggressiveVolume1s(new BigDecimal("20"))
-                .vwap1s(new BigDecimal("100.4"))
                 .lastTradePrice(new BigDecimal("100.5"))
+                .window5s(TradeFlowWindow.builder()
+                        .signedFlowImbalance(new BigDecimal("0.30"))
+                        .tradeCount(50)
+                        .buyAggressiveVolume(new BigDecimal("100"))
+                        .build())
+                .window1s(TradeFlowWindow.builder()
+                        .signedFlowImbalance(new BigDecimal("0.40"))
+                        .tradeCount(12)
+                        .buyAggressiveVolume(new BigDecimal("20"))
+                        .vwap(new BigDecimal("100.4"))
+                        .build())
+                .window15s(TradeFlowWindow.builder()
+                        .signedFlowImbalance(new BigDecimal("-0.90"))
+                        .tradeCount(400)
+                        .build())
                 .build();
 
         MarketSignal signal = evaluateFirst(featuresWith(tradeFlow));
@@ -113,6 +147,8 @@ class TradeFlowSignalRuleTest {
         assertEquals("20", signal.attributes().get("buyAggressiveVolume1s"));
         assertEquals("100.4", signal.attributes().get("vwap1s"));
         assertEquals("100.5", signal.attributes().get("lastTradePrice"));
+        // 15s/60s windows are carried by the domain but not read by this rule (pre-paper scope).
+        assertTrue(signal.attributes().keySet().stream().noneMatch(k -> k.endsWith("15s") || k.endsWith("60s")));
     }
 
     @Test
@@ -182,9 +218,13 @@ class TradeFlowSignalRuleTest {
     @Test
     void imbalance1sOutsideRangeProducesNoTradeInvalidTradeFlow() {
         MarketSignal signal = evaluateFirst(featuresWith(TradeFlowFeature.builder()
-                .signedFlowImbalance5s(new BigDecimal("0.30"))
-                .tradeCount5s(50)
-                .signedFlowImbalance1s(new BigDecimal("1.42"))
+                .window5s(TradeFlowWindow.builder()
+                        .signedFlowImbalance(new BigDecimal("0.30"))
+                        .tradeCount(50)
+                        .build())
+                .window1s(TradeFlowWindow.builder()
+                        .signedFlowImbalance(new BigDecimal("1.42"))
+                        .build())
                 .build()));
 
         assertEquals(SignalType.NO_TRADE_INVALID_TRADE_FLOW, signal.type());
@@ -194,8 +234,10 @@ class TradeFlowSignalRuleTest {
     @Test
     void negativeTradeCountProducesNoTradeInvalidTradeFlow() {
         MarketSignal signal = evaluateFirst(featuresWith(TradeFlowFeature.builder()
-                .signedFlowImbalance5s(new BigDecimal("0.30"))
-                .tradeCount5s(-1)
+                .window5s(TradeFlowWindow.builder()
+                        .signedFlowImbalance(new BigDecimal("0.30"))
+                        .tradeCount(-1)
+                        .build())
                 .build()));
 
         assertEquals(SignalType.NO_TRADE_INVALID_TRADE_FLOW, signal.type());
@@ -209,8 +251,10 @@ class TradeFlowSignalRuleTest {
 
     private static TradeFlowFeature tradeFlow(BigDecimal signedFlowImbalance5s, int tradeCount5s) {
         return TradeFlowFeature.builder()
-                .signedFlowImbalance5s(signedFlowImbalance5s)
-                .tradeCount5s(tradeCount5s)
+                .window5s(TradeFlowWindow.builder()
+                        .signedFlowImbalance(signedFlowImbalance5s)
+                        .tradeCount(tradeCount5s)
+                        .build())
                 .build();
     }
 

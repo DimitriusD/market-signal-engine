@@ -10,6 +10,11 @@ public enum SignalType {
     NO_TRADE_VOLATILITY_MISSING,
     NO_TRADE_SPREAD_MISSING,
     NO_TRADE_INCOMPLETE_BOOK,
+    // Aggregate MFS v2 quality status gate (mse-signals-v8). UNSAFE / NO_DATA / missing status →
+    // NO_TRADE_QUALITY_UNSAFE; DEGRADED → NO_TRADE_QUALITY_DEGRADED (hard block for the paper
+    // period, path-to-paper-trading.md decision 8.4). qualityReasons are carried in attributes.
+    NO_TRADE_QUALITY_UNSAFE,
+    NO_TRADE_QUALITY_DEGRADED,
     SPREAD_ACCEPTABLE,
     SPREAD_TOO_WIDE,
     BUY_PRESSURE,

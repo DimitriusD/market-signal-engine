@@ -316,8 +316,10 @@ class DefaultMarketSignalEngineTest {
         // Out-of-range imbalance is a Phase-3 RISK_OFF; no composite setup must form on garbage input.
         MarketFeaturesSnapshot features = SignalRuleTestSupport.tradableFeaturesBuilder()
                 .tradeFlow(TradeFlowFeature.builder()
-                        .signedFlowImbalance5s(new BigDecimal("1.42"))
-                        .tradeCount5s(50)
+                        .window5s(com.trading.marketsignalengine.application.domain.model.feature.TradeFlowWindow.builder()
+                                .signedFlowImbalance(new BigDecimal("1.42"))
+                                .tradeCount(50)
+                                .build())
                         .build())
                 .build();
 
@@ -377,6 +379,31 @@ class DefaultMarketSignalEngineTest {
         assertEquals("ONE_OR_MORE_RISK_OFF_SIGNALS_ACTIVE", noTrade.attributes().get("reason"));
         assertEquals("DefaultMarketSignalEngine", noTrade.attributes().get("emittedBy"));
         assertTrue(noTrade.attributes().get("riskOffSignals").contains(SignalType.SPREAD_TOO_WIDE.name()));
+    }
+
+    @Test
+    void degradedAggregateStatusBlocksEvenWhenPerSourceFlagsAreClean() {
+        // mse-signals-v8 / decision 8.4: DEGRADED (here: 60s warm-up) is a hard block during paper.
+        // All directional data that would otherwise form a LONG setup is present and must not leak.
+        MarketFeaturesSnapshot features = SignalRuleTestSupport.tradableFeaturesBuilder()
+                .quality(SignalRuleTestSupport.tradableQuality().toBuilder()
+                        .status(com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus.DEGRADED)
+                        .qualityReasons(List.of("WARMING_UP"))
+                        .warmingUp(true)
+                        .build())
+                .build();
+
+        MarketSignalSnapshot snapshot = engine.evaluate(features);
+
+        assertEquals(MarketBias.RISK_OFF, snapshot.marketBias());
+        assertEquals(RiskLevel.NO_TRADE, snapshot.riskLevel());
+        assertEquals(SetupSide.NONE, snapshot.setup().side());
+        assertTrue(has(snapshot, SignalType.NO_TRADE_QUALITY_DEGRADED));
+        assertEquals(1, count(snapshot, SignalType.NO_TRADE_CONDITION));
+        assertFalse(has(snapshot, SignalType.DATA_TRADABLE));
+        assertFalse(has(snapshot, SignalType.SPREAD_ACCEPTABLE));
+        assertFalse(has(snapshot, SignalType.BUY_PRESSURE));
+        assertFalse(has(snapshot, SignalType.LONG_SETUP_FORMING));
     }
 
     private static boolean has(MarketSignalSnapshot snapshot, SignalType type) {
