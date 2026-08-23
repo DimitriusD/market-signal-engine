@@ -50,8 +50,12 @@ import java.util.Set;
  *       added (stale trades are not a book-specific fault).</li>
  *   <li><b>Failed dependency → FAILED</b>, checked before any feature object is read: a failed
  *       {@code bbo} group ({@code BOOK_BBO_CALCULATOR_FAILED}), a failed {@code order-book} group
- *       ({@code BOOK_ORDER_BOOK_CALCULATOR_FAILED}), both codes when both failed. Failures of
- *       {@code trade-flow} / {@code short-term-regime} do not touch book evidence.</li>
+ *       ({@code BOOK_ORDER_BOOK_CALCULATOR_FAILED}), both codes when both failed. A failed
+ *       {@code short-term-regime} group is not a book dependency and leaves book evidence untouched.
+ *       A failed {@code trade-flow} group is not a book-specific fault either, but it fails every
+ *       horizon at Stage 3 (eligibility is trade-flow-backed), so book evidence is then the
+ *       eligibility <em>projection</em> — FAILED with the eligibility reasons verbatim, no
+ *       {@code BOOK_*} code — via step 1, never via this step.</li>
  *   <li><b>Book-specific quality → UNTRUSTED.</b> {@code sourceOrderBookTrusted == false}
  *       ({@code BOOK_SOURCE_UNTRUSTED}), {@code syncStatus != IN_SYNC} ({@code BOOK_NOT_IN_SYNC}),
  *       {@code staleOrderBookState} ({@code BOOK_STALE}), {@code incompleteBook}

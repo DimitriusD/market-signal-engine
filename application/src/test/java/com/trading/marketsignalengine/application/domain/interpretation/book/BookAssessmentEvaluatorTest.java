@@ -43,6 +43,7 @@ import com.trading.marketsignalengine.application.domain.interpretation.Evidence
 import com.trading.marketsignalengine.application.domain.interpretation.EvidenceAvailabilityStatus;
 import com.trading.marketsignalengine.application.domain.interpretation.EvidenceDimension;
 import com.trading.marketsignalengine.application.domain.interpretation.EvidenceStrength;
+import com.trading.marketsignalengine.application.domain.interpretation.HorizonEligibilityStatus;
 import com.trading.marketsignalengine.application.domain.interpretation.InterpretationDirection;
 import com.trading.marketsignalengine.application.domain.interpretation.quality.QualityAssessment;
 import com.trading.marketsignalengine.application.domain.interpretation.quality.QualityReasonCodes;
@@ -468,7 +469,7 @@ class BookAssessmentEvaluatorTest {
     }
 
     @Test
-    void failedTradeFlowOrRegimeGroupsAreNotBookFaults() {
+    void failedShortTermRegimeGroupIsNotABookDependency() {
         // a failed short-term-regime group leaves book evidence untouched (eligibility also unaffected)
         MarketFeaturesSnapshot failedRegime = SignalRuleTestSupport.tradableFeaturesBuilder()
                 .tradeFlow(activeTradeFlow())
@@ -487,6 +488,36 @@ class BookAssessmentEvaluatorTest {
         assertEquals(EvidenceAvailabilityStatus.AVAILABLE, evidence.availabilityStatus());
         assertEquals(InterpretationDirection.BULLISH, evidence.direction());
         assertEquals(List.of(BOOK_BULLISH), evidence.reasonCodes());
+    }
+
+    @Test
+    void failedTradeFlowGroupProjectsFailedThroughEligibilityPrecedence() {
+        // trade-flow is not a book dependency, but Stage 3 eligibility is trade-flow-backed: a failed
+        // trade-flow group fails every horizon, so H1S book evidence is the eligibility projection —
+        // the strongly bullish book values are never read and no BOOK_* code is added
+        MarketFeaturesSnapshot failedTradeFlow = SignalRuleTestSupport.tradableFeaturesBuilder()
+                .tradeFlow(activeTradeFlow())
+                .bbo(bbo("6"))
+                .book(book("0.60"))
+                .quality(SignalRuleTestSupport.tradableQuality().toBuilder()
+                        .status(FeatureQualityStatus.DEGRADED)
+                        .qualityReasons(List.of("CALCULATOR_FAILURE")).build())
+                .diagnostics(FeatureDiagnostics.builder()
+                        .failedFeatureGroups(List.of("trade-flow")).totalFeatureGroups(4).build())
+                .build();
+        QualityAssessment qa = QUALITY_RESOLVER.resolve(failedTradeFlow, ASSESSED_AT, QUALITY_POLICY);
+        assertEquals(HorizonEligibilityStatus.FAILED, qa.horizonEligibilities().statusOf(H1S),
+                "precondition: a failed trade-flow group fails the horizon at Stage 3");
+
+        EvidenceAssessment h1s = evaluator.evaluate(failedTradeFlow, qa, POLICY, H1S);
+
+        assertEquals(EvidenceAvailabilityStatus.FAILED, h1s.availabilityStatus(), "projected from eligibility");
+        assertEquals(InterpretationDirection.UNKNOWN, h1s.direction());
+        assertNull(h1s.evidenceStrength());
+        assertEquals(List.of(QualityReasonCodes.TRADE_FLOW_CALCULATOR_FAILED), h1s.reasonCodes(),
+                "the eligibility reason is kept verbatim");
+        assertFalse(h1s.reasonCodes().stream().anyMatch(code -> code.value().startsWith("BOOK_")),
+                "no book-specific code is added on top of the projection");
     }
 
     // ------------------------------------------------------------------ book-specific quality
