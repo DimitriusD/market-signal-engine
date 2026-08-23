@@ -1639,6 +1639,96 @@ shadow mode, metrics, replay loader, production threshold calibration. **Milesto
 завершений**: всі чотири evidence dimensions готові, але horizon aggregation і cross-horizon
 interpretation ще не реалізовані.
 
+### Етап 6. Per-horizon interpretation та HorizonAssessments — ✅ реалізовано 2026-08-24
+
+**Мета** (§11.5 Horizon assessment; Фаза 5→6): зібрати чотири незалежні evidence dimensions у рівно
+чотири `HorizonAssessment` — відповідь на «що відбувається на конкретному горизонті» — без
+cross-horizon interpretation і без opportunity. Чотири коміти: `167338f` (book cleanup), `f5399d1`
+(direction/regime resolvers), `a2af703` (orchestration), + docs.
+
+**Cleanup (167338f):** Javadoc `BookAssessmentEvaluator` уточнено — failed `trade-flow` не є
+book-specific fault, але failing-ить всі горизонти на Stage 3 (eligibility trade-flow-backed), тож
+book evidence стає eligibility projection (FAILED, reasons verbatim, без `BOOK_*`); справді не
+торкається book лише failed `short-term-regime`. Тест перейменовано за фактичною поведінкою, доданий
+окремий projected-FAILED тест.
+
+**Safe public boundary (a2af703):** єдиний public entry point —
+`HorizonAssessmentEvaluator.evaluate(snapshot, qualityAssessment, HorizonInterpretationPolicy)`.
+Evaluator сам викликає кожен з чотирьох evidence evaluator-ів рівно один раз для цього самого
+snapshot; public API, що приймає незалежно передані evidence containers, свідомо не існує (containers
+поки без source lineage — їх можна було б змішати з різних snapshots). Всі чотири evidence
+evaluator-и ділять один `SnapshotQualityConsistencyGuard` (counting guard бачить рівно 4 verify на
+evaluation; guard-ctor-и evidence evaluator-ів стали public — guard не ослаблений і не обходиться);
+mismatched snapshot/assessment пара → fail-fast. `HorizonInterpretationPolicy` — versioned aggregate
+чотирьох policies (pure composition, без власних thresholds і production defaults).
+`HorizonAssessments` — strict immutable container: рівно чотири canonical horizons, key ↔
+`assessment.horizon()`, extra/null keys rejected, value equality.
+
+**Direction resolution (f5399d1, package-private `HorizonDirectionResolver`):** primary = FLOW +
+MOMENTUM (на 1S — тільки FLOW: not-scoped momentum не тягне валідний Flow у UNKNOWN). Directional
+vote = `AVAILABLE` + BULLISH/BEARISH; valid neutral = `AVAILABLE + NEUTRAL`; все інше — не vote і не
+neutral confirmation. Матриця 5S/15S/60S:
+
+| Flow | Momentum | Результат | Strength | Reason |
+|---|---|---|---|---|
+| directional | same side | той самий бік | `min(flow, momentum)` | `HORIZON_FLOW_MOMENTUM_CONFIRMED` |
+| directional | opposite | `MIXED` | `null` | `HORIZON_FLOW_MOMENTUM_DIVERGENCE` |
+| directional | neutral / non-vote | Flow бік | Flow strength | `HORIZON_DIRECTION_FROM_FLOW` |
+| neutral / non-vote | directional | Momentum бік | Momentum strength | `HORIZON_DIRECTION_FROM_MOMENTUM` |
+| valid neutral | valid neutral | `NEUTRAL` | реальний `0` | `HORIZON_DIRECTION_NEUTRAL` |
+| інше | інше | `UNKNOWN` | `null` | `HORIZON_DIRECTION_INSUFFICIENT` |
+
+Divergence не перетворюється на reversal/dominant side; unconfirmed напрямок без discount-factor;
+null strength на vote → directional результат із null strength (нічого не вигадується). Book —
+context після primary resolution і тільки для directional результату: support → reason без
+strength-бонусу; opposite/MIXED book → напрямок збережений, strength → `null`
+(`HORIZON_BOOK_CONTRADICTS_DIRECTION` — book un-confirm-ить, ніколи не розвертає); neutral book →
+`HORIZON_BOOK_NEUTRAL`; non-available book — жодного horizon-level коду. Book сам ніколи не створює
+direction.
+
+**Regime resolution (f5399d1, package-private `MarketRegimeResolver`):** тільки typed
+`VolatilityAssessment.level()` + MOMENTUM evidence (без reason-parsing, Flow/Book/spread/horizon
+direction):
+
+| VolatilityLevel | Momentum | Regime | Reason |
+|---|---|---|---|
+| не AVAILABLE / UNKNOWN | — | `UNKNOWN` | `HORIZON_REGIME_UNKNOWN` |
+| HIGH / EXTREME | будь-який | `VOLATILE` | `HORIZON_REGIME_VOLATILE` |
+| LOW | directional | `TRENDING` | `HORIZON_REGIME_TRENDING` |
+| LOW | non-directional (вкл. 1S not-scoped) | `QUIET` | `HORIZON_REGIME_QUIET` |
+| NORMAL | directional | `TRENDING` | `HORIZON_REGIME_TRENDING` |
+| NORMAL | valid neutral | `RANGING` | `HORIZON_REGIME_RANGING` |
+| NORMAL | unknown / non-available | `UNKNOWN` | `HORIZON_REGIME_UNKNOWN` |
+
+Рівно один regime reason; `null` regime лише у non-eligible горизонту (resolver туди не викликається).
+
+**Eligibility precedence:** authoritative — `qualityAssessment.eligibilityOf(horizon)`; original
+`HorizonEligibility` (зі своїми reasons) зберігається в assessment (жодних порожніх
+`HorizonEligibility.eligible()` замін). Non-eligible: direction UNKNOWN, strength null, regime null,
+horizon reasons = eligibility reasons verbatim, всі чотири projected nested evidence (AVAILABLE
+nested evidence на non-eligible горизонті → fail-fast у `HorizonAssessment`); ніколи не NEUTRAL.
+Horizon reasons описують лише resolution (direction → book context → regime); nested evidence codes
+не копіюються нагору. Typed `VolatilityLevel` споживається regime resolver-ом до flattening
+volatility evidence у generic список.
+
+Тести: +62 (738 загалом, 0 failures, 0 skipped): direction matrix (confirmed/divergence/
+single-source/neutral/insufficient, null-strength, 1S flow-only), book context (support/contradict/
+neutral/non-available/book-alone), regime matrix (усі рядки таблиці), resolution invariants,
+container (incl. key↔horizon mismatch), aggregate policy invariants, orchestration end-to-end з
+реальним Stage 3 resolver (guard 4×/evaluation, mismatch fail-fast, determinism, non-eligible
+статуси WARMING_UP/UNAVAILABLE/UNTRUSTED/FAILED e2e — UNKNOWN не досяжний через guard і pinned на
+unit-рівні, partial history gap), reflection-перевірка, що public API не приймає evidence containers.
+
+**Runtime isolation:** V1 `StandardSignalEngine`, Kafka input/output, metrics, golden outputs,
+schemas — без змін; horizon layer — pure domain без Spring wiring.
+
+**Не входить в Етап 6 (Етап 7+):** `CrossHorizonInterpreter` / `CrossHorizonAssessment` resolution,
+dominant horizon, alignment 1S/5S/15S/60S, pullback/reversal, `OpportunityResolver`, LONG/SHORT/
+NO_TRADE, probability/confidence, expected edge/costs, V2 Avro mapper/publisher/topic, runtime
+assembler `MarketInterpretationSnapshot`, Spring wiring, shadow mode, metrics, replay loader,
+production thresholds. **Milestone B не завершений**: per-horizon interpretation готова, cross-horizon
+interpretation ще ні.
+
 ## 16. Test strategy
 
 ### Unit tests

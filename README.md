@@ -318,10 +318,54 @@ All three produce strict, immutable four-horizon containers with value equality.
   `UNAVAILABLE` (never neutral). Spread is validated as geometry but is **never** a directional vote
   and the policy has no `maxSpreadBps` — spread acceptance is a later execution/liquidity gate.
 
-Flow/Momentum confirmation and divergence, `HorizonAssessment` aggregation, the cross-horizon
-interpreter, `MarketRegimeResolver`, opportunity resolution, the V2 runtime path and production policy
-values are not implemented yet; V1 (`mse-signals-v8`) goldens, metrics and Kafka runtime are
-unchanged. Details: roadmap §15, "Етап 5".
+Details: roadmap §15, "Етап 5".
+
+## Per-horizon interpretation (Stage 6, pure, not yet wired)
+
+`interpretation/horizon` turns the four evidence dimensions into exactly one `HorizonAssessment` per
+`MarketHorizon`. The **single safe public entry point** is
+`HorizonAssessmentEvaluator.evaluate(snapshot, qualityAssessment, policy)` with a versioned
+`HorizonInterpretationPolicy` (a pure aggregate of the four evidence policies, no thresholds of its
+own): the evaluator invokes each evidence evaluator itself, exactly once, against the same
+snapshot/assessment pair — there is deliberately no public API accepting independently produced
+evidence containers, so evidence from different snapshots cannot be mixed; all four evidence
+evaluators share one `SnapshotQualityConsistencyGuard` and a mismatched pair fails fast. The result
+(`HorizonAssessments`, strict immutable four-horizon container with key↔horizon agreement) is
+explainable without re-reading the raw snapshot; the direction/regime reducers are package-private.
+
+- **Eligibility first.** The authoritative verdict is `qualityAssessment.eligibilityOf(horizon)` and
+  the **original** `HorizonEligibility` (with its reasons) is stored in the assessment. A
+  non-ELIGIBLE horizon: direction `UNKNOWN`, no strength, `null` regime, horizon reasons = the
+  eligibility reasons verbatim (no resolution codes), all four projected nested evidence attached
+  (an AVAILABLE one there fails fast) — never NEUTRAL.
+- **Direction** (`HorizonDirectionResolver`, typed evidence only — no reason-code parsing): FLOW +
+  MOMENTUM are primary; a directional vote is `AVAILABLE` + BULLISH/BEARISH, a valid neutral is
+  `AVAILABLE + NEUTRAL`, nothing else counts. On 5S/15S/60S: agreement → confirmed direction with
+  `min(flow, momentum)` strength (`HORIZON_FLOW_MOMENTUM_CONFIRMED`; a null strength on a vote stays
+  null — nothing invented); disagreement → `MIXED` with no strength
+  (`HORIZON_FLOW_MOMENTUM_DIVERGENCE` — reported, never a reversal or dominant side); a single vote →
+  that side with its own strength (`HORIZON_DIRECTION_FROM_FLOW`/`_FROM_MOMENTUM`, no discount);
+  both valid neutral → `NEUTRAL` with a real `0` (`HORIZON_DIRECTION_NEUTRAL`); otherwise `UNKNOWN`
+  (`HORIZON_DIRECTION_INSUFFICIENT`) — missing evidence is never a neutral confirmation. On 1S the
+  resolution is Flow-only (the not-scoped momentum cannot pull a valid Flow reading down).
+- **Book context** (after a directional primary result only): support adds
+  `HORIZON_BOOK_SUPPORTS_DIRECTION` and never strength; an opposing or MIXED book keeps the direction
+  but drops the strength to `null` (`HORIZON_BOOK_CONTRADICTS_DIRECTION` — book can un-confirm, never
+  reverse); a neutral book is context (`HORIZON_BOOK_NEUTRAL`); a non-AVAILABLE book adds no
+  horizon-level code (its cause lives in the nested evidence). Book alone never creates a direction.
+- **Regime** (`MarketRegimeResolver`, typed `VolatilityLevel` + MOMENTUM only — no Flow/Book/spread
+  input, the level consumed before the volatility evidence is flattened): unusable volatility →
+  `UNKNOWN`; `HIGH`/`EXTREME` → `VOLATILE` regardless of momentum; `LOW` → `TRENDING` with a
+  directional momentum, else `QUIET` (including 1S, where momentum is not scoped); `NORMAL` →
+  `TRENDING` / `RANGING` (valid neutral) / `UNKNOWN` (momentum unknown or unavailable). `null` regime
+  exists only on non-eligible horizons; `MarketRegime.UNKNOWN` means assessed but not classifiable.
+- **Horizon reasons** describe the resolution only, in order: direction, book context, regime.
+  Nested evidence keeps its own reason codes and is never flattened into the horizon list.
+
+The cross-horizon interpreter (alignment, dominant horizon, pullback/reversal), opportunity
+resolution, LONG/SHORT/NO_TRADE, the V2 runtime path (assembler, Avro mapper, publisher, topic,
+Spring wiring, shadow mode) and production policy values are not implemented yet; V1
+(`mse-signals-v8`) goldens, metrics and Kafka runtime are unchanged. Details: roadmap §15, "Етап 6".
 
 ## Failure behaviour, delivery semantics and metrics
 
