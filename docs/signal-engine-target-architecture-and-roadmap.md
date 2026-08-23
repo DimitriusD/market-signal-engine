@@ -969,6 +969,12 @@ Text summary потрібен людині. Typed factors потрібні tests
 
 ### Фаза 4. Flow Alignment V1
 
+> Статус: пункти 1–3 і 6 реалізовані як pure domain layer в Етапі 4 (§15, «Етап 4») — per-horizon
+> flow evidence з activity / unknown-side gates і boundary tests, horizon-specific thresholds у
+> явній versioned `FlowAssessmentPolicy` (без production calibration і Spring configuration);
+> пункти 4 (production configuration) і 5 (aligned / mixed / pullback / reversal) лишаються відкритими
+> і належать cross-horizon етапу.
+
 #### Роботи
 
 1. Оцінити flow per horizon.
@@ -1398,6 +1404,120 @@ properties, live `assessedAt` wiring через Clock.
 eligibility DoD (Етап 3) реально виконані й підключені до runtime path з production policy; на момент
 Етапу 3 quality/eligibility існує як pure domain layer без runtime wiring — Milestone A ще не
 оголошується завершеним.
+
+### Етап 4. Multi-horizon Flow Evidence V1 — ✅ реалізовано 2026-08-23
+
+Мета етапу — перший directional evidence evaluator V2 (roadmap Фаза 4, п. 1–3 і 6; §8.3 Evidence
+layer; §11.2 Flow assessment): для кожного з `1S/5S/15S/60S` незалежно оцінити trade flow і повернути
+typed `FLOW` `EvidenceAssessment` — `BULLISH` / `BEARISH` / `NEUTRAL` або `UNKNOWN`, коли flow
+неможливо надійно інтерпретувати. Це heuristic **evidence**, не probability, не confidence, не
+BUY/SELL і не торговельна opportunity. V1 (`mse-signals-v8`) лишається єдиним runtime engine.
+
+Пакет `application/.../domain/interpretation/flow` (pure: без Spring/Kafka/Avro/infrastructure/
+`Clock`/`Instant.now()`/metrics; однаковий input + policy ⇒ value-equal результат):
+
+```text
+MarketFeaturesSnapshot + QualityAssessment (Етап 3) + FlowAssessmentPolicy
+  → FlowAssessmentEvaluator   (per horizon: eligibility → window → missing → invalid
+                               → activity → unknown-side → direction)
+  → FlowAssessments { 1S, 5S, 15S, 60S → EvidenceAssessment(FLOW) }
+```
+
+1. **Policy** — `FlowAssessmentPolicy(policyVersion, FlowHorizonPolicy × 4)`: `policyVersion`
+   non-null / non-blank / не placeholder (`unknown`, `todo`, `n/a`, … — спільна перевірка
+   `Invariants.requireNotPlaceholder`, та сама, що й для `InterpretationLineage`); рівно один
+   `FlowHorizonPolicy` на `MarketHorizon`, canonical order `1S → 5S → 15S → 60S`, missing або duplicate
+   horizon → fail-fast (horizon є частиною `FlowHorizonPolicy`, тож policy не можна «покласти не в той
+   ключ»). Per horizon: `bullishImbalanceThreshold ∈ (0, 1]`, `bearishImbalanceThreshold ∈ [-1, 0)`,
+   bearish строго менший за bullish, `minTradeCount > 0`, `minAggressiveTradeCount ≥ 0`,
+   `maxUnknownSideRatio ∈ [0, 1]`; лише `BigDecimal`, жодних `double`; усі колекції immutable.
+   **Жодних defaults і production values в evaluator**: thresholds ще не відкалібровані, тести
+   використовують explicit fixture policy з різними значеннями per horizon; один V1 threshold не
+   копіюється на всі горизонти.
+2. **Канонічний вибір вікна** — `TradeFlowFeature.window(MarketHorizon)` (`1S → window1s`, … ,
+   `60S → window60s`); `FeatureAvailabilityResolver.tradeFlowWindowOf` тепер делегує туди, його
+   семантика і тести Stage 1 незмінні.
+3. **Eligibility має пріоритет.** Для non-ELIGIBLE horizon evaluator **не читає** feature values, а
+   проєктує Stage 3 verdict, зберігаючи `HorizonEligibility.reasonCodes()` verbatim:
+
+   | Horizon eligibility | FLOW `availabilityStatus` | direction | strength |
+   |---|---|---|---|
+   | `ELIGIBLE` | за flow rules нижче | за даними | за даними |
+   | `WARMING_UP` | `UNAVAILABLE` | `UNKNOWN` | — |
+   | `UNAVAILABLE` | `UNAVAILABLE` | `UNKNOWN` | — |
+   | `UNTRUSTED` | `UNTRUSTED` | `UNKNOWN` | — |
+   | `FAILED` | `FAILED` | `UNKNOWN` | — |
+   | `UNKNOWN` | `UNKNOWN` | `UNKNOWN` | — |
+
+   Warm-up не стає neutral, missing не стає zero, untrusted / failed calculator не стають neutral.
+4. **Evaluation table для ELIGIBLE horizon** (first match wins; основний directional feature —
+   `signedFlowImbalance ∈ [-1, 1]`):
+
+   | Крок | Умова | Status | Direction | Strength | Reason |
+   |---|---|---|---|---|---|
+   | missing | група / window відсутні | `UNAVAILABLE` | `UNKNOWN` | absent | `FLOW_WINDOW_MISSING` |
+   | missing | `signedFlowImbalance == null` | `UNAVAILABLE` | `UNKNOWN` | absent | `FLOW_IMBALANCE_MISSING` |
+   | missing | `tradeCount` / `aggressiveTradeCount` / `unknownSideCount == null` | `UNAVAILABLE` | `UNKNOWN` | absent | `FLOW_ACTIVITY_COUNTS_MISSING` (разом із попереднім, якщо обидва) |
+   | invalid | imbalance `< -1` або `> 1` | `UNTRUSTED` | `UNKNOWN` | absent | `FLOW_IMBALANCE_OUT_OF_RANGE` |
+   | invalid | negative count; `aggressive > tradeCount`; `unknownSide > tradeCount`; `aggressive + unknownSide > tradeCount`; за наявності `validQtyTradeCount`: negative, `> tradeCount`, або `aggressive > validQty` | `UNTRUSTED` | `UNKNOWN` | absent | `FLOW_ACTIVITY_COUNTS_INVALID` (разом із попереднім, якщо обидва) |
+   | activity | `tradeCount < minTradeCount` або `aggressiveTradeCount < minAggressiveTradeCount` | `AVAILABLE` | `UNKNOWN` | absent | `FLOW_INSUFFICIENT_ACTIVITY` |
+   | unknown-side | `unknownSideCount / tradeCount > maxUnknownSideRatio` | `UNTRUSTED` | `UNKNOWN` | absent | `FLOW_UNKNOWN_SIDE_RATIO_EXCEEDED` |
+   | direction | `imbalance >= bullishThreshold` | `AVAILABLE` | `BULLISH` | `abs(imbalance)` | `FLOW_BULLISH_IMBALANCE` |
+   | direction | `imbalance <= bearishThreshold` | `AVAILABLE` | `BEARISH` | `abs(imbalance)` | `FLOW_BEARISH_IMBALANCE` |
+   | direction | `bearish < imbalance < bullish` | `AVAILABLE` | `NEUTRAL` | `0` | `FLOW_NEUTRAL_IMBALANCE` |
+
+   Принципово: **missing ≠ insufficient activity ≠ neutral ≠ untrusted** — чотири різні стани.
+   `INSUFFICIENT_ACTIVITY` — дані пораховані (`AVAILABLE`), але активності замало для directional
+   conclusion, тому direction `UNKNOWN` і strength відсутній. `NEUTRAL` має реально обчислений
+   strength `0`; відсутній `EvidenceStrength` завжди означає «оцінити не вдалося», а не нуль.
+5. **Межі детерміновані.** Directional thresholds inclusive на directional стороні:
+   `threshold − ε → NEUTRAL`, `threshold → BULLISH`, `threshold + ε → BULLISH` (симетрично для bearish).
+   Unknown-side ratio рахується як `BigDecimal` з explicit scale
+   `max(6, scale(maxUnknownSideRatio))` і `RoundingMode.CEILING`, тож округлення ніколи не переносить
+   значення через межу policy: `ratio == max` проходить, `ratio > max` → `UNTRUSTED` навіть для
+   неперіодичних часток (`1/3` проти `0.33` / `0.333333` / `0.34`).
+6. **Strength formula:** `EvidenceStrength = |signedFlowImbalance|` для BULLISH/BEARISH (normalised
+   plain decimal, `-0.4200 → 0.42`), `0` для NEUTRAL. Це heuristic strength, не probability і не
+   confidence; калібрація — replay-етап.
+7. **MIXED не створюється** з одного aggregate window: alignment, pullback, reversal і конфлікти між
+   горизонтами — наступний cross-horizon шар. Snapshot-level quality (`BLOCKED`, `eligibleForTrading`)
+   тут не перезастосовується — це факт про snapshot для opportunity layer; flow evidence — факт про одне
+   eligible window.
+8. **Reason taxonomy** (`FlowReasonCodes`, typed `ReasonCode`, deterministic pipeline order, без
+   duplicates, immutable `ALL`): `FLOW_WINDOW_MISSING`, `FLOW_IMBALANCE_MISSING`,
+   `FLOW_ACTIVITY_COUNTS_MISSING`, `FLOW_IMBALANCE_OUT_OF_RANGE`, `FLOW_ACTIVITY_COUNTS_INVALID`,
+   `FLOW_UNKNOWN_SIDE_RATIO_EXCEEDED`, `FLOW_INSUFFICIENT_ACTIVITY`, `FLOW_BULLISH_IMBALANCE`,
+   `FLOW_BEARISH_IMBALANCE`, `FLOW_NEUTRAL_IMBALANCE`. Eligibility reasons (`WINDOW_WARMING_UP`,
+   `STALE_TRADES`, `TRADE_FLOW_CALCULATOR_FAILED`, `SOURCE_NO_DATA`, …) не перейменовуються й не
+   дублюються — вони зберігаються першими, flow reasons додаються після них.
+9. **Свідоме обмеження Flow V1:** `tradeIntensity`, `totalAggressiveVolume`, `validQtyTradeCount`
+   (окрім перевірки очевидних count contradictions вище), `signedTradeFlow`, `avgTradeSize`, `vwap`
+   **не** є gates і не впливають на direction/strength — production thresholds або weights для них без
+   replay не вигадуються.
+10. **Результат** — `FlowAssessments`: рівно чотири horizons, canonical order, fail-fast lookup,
+    лише `FLOW` dimension, immutable, value equality; не raw `Map`.
+
+Тести: +104 (503 загалом, 0 failures): `FlowHorizonPolicyTest` (17), `FlowAssessmentPolicyTest` (16),
+`FlowAssessmentsTest` (5), `FlowReasonCodesTest` (2), `FlowAssessmentEvaluatorTest` (62: eligibility
+projection для кожного non-ELIGIBLE status; non-eligible horizon не читає навіть corrupt values; null
+≠ zero/neutral; zero imbalance → NEUTRAL/0; low activity → UNKNOWN, не NEUTRAL; bullish/bearish
+`−ε / exact / +ε` для всіх чотирьох горизонтів; exact `maxUnknownSideRatio` проходить, вище —
+UNTRUSTED; negative counts, count contradictions, out-of-range imbalance → UNTRUSTED; strength =
+|imbalance|; determinism; різні verdicts на різних горизонтах за однакового flow; інтеграція з реальним
+Stage 3 resolver: partial warm-up, stale trades, failed `trade-flow`, NO_DATA), `TradeFlowFeatureTest`
+(2). Stage 1 availability, Stage 2 invariants і Stage 3 quality tests без змін; golden files
+byte-for-byte unchanged.
+
+**Runtime isolation:** V1 `StandardSignalEngine` — єдиний runtime engine; V1 Kafka input/output,
+`SignalConfiguration`, metrics, golden outputs не змінені; flow evaluator — pure domain layer без
+Spring wiring, production policy values, V2 Avro mapper/publisher/topic чи shadow mode.
+
+**Не входить в Етап 4 (Етап 5+):** `MomentumAssessmentEvaluator`, `VolatilityAssessmentEvaluator`,
+`BookAssessmentEvaluator`, `CrossHorizonInterpreter` (alignment / pullback / reversal / MIXED),
+`MarketRegimeResolver`, `OpportunityResolver`, runtime assembler `MarketInterpretationSnapshot` (жодних
+dummy snapshots, UNKNOWN `CrossHorizonAssessment` чи штучної BLOCKED opportunity), V2 Avro mapper,
+V2 Kafka publisher/topic, Spring wiring, shadow mode, V1↔V2 projection, metrics, schema fingerprint
+tests, probability/confidence, forecast, cost/edge model, production threshold calibration.
 
 ## 16. Test strategy
 

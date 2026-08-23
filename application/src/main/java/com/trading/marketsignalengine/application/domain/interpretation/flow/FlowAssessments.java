@@ -1,0 +1,78 @@
+package com.trading.marketsignalengine.application.domain.interpretation.flow;
+
+import static com.trading.marketsignalengine.application.domain.interpretation.Invariants.require;
+import static com.trading.marketsignalengine.application.domain.interpretation.Invariants.requireNonNull;
+
+import com.trading.marketsignalengine.application.domain.interpretation.EvidenceAssessment;
+import com.trading.marketsignalengine.application.domain.interpretation.EvidenceDimension;
+import com.trading.marketsignalengine.application.domain.model.MarketHorizon;
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * The typed result of {@link FlowAssessmentEvaluator}: exactly one {@code FLOW}
+ * {@link EvidenceAssessment} per {@link MarketHorizon}, always in canonical order
+ * ({@code 1S, 5S, 15S, 60S}). A missing horizon or a non-FLOW dimension fails fast; a duplicate cannot
+ * exist (the only ways to build one are a per-horizon map or the four-argument factory). Lookups never
+ * return {@code null}. Immutable; value equality, so two evaluations of the same input and policy
+ * compare equal.
+ */
+public final class FlowAssessments {
+
+    private final Map<MarketHorizon, EvidenceAssessment> byHorizon;
+
+    public FlowAssessments(Map<MarketHorizon, EvidenceAssessment> byHorizon) {
+        requireNonNull(byHorizon, "flow assessments");
+        EnumMap<MarketHorizon, EvidenceAssessment> copy = new EnumMap<>(MarketHorizon.class);
+        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
+            EvidenceAssessment evidence = byHorizon.get(horizon);
+            require(evidence != null, "missing FLOW evidence for horizon " + horizon);
+            require(evidence.dimension() == EvidenceDimension.FLOW,
+                    horizon.wireValue() + " flow assessment must have dimension FLOW, got " + evidence.dimension());
+            copy.put(horizon, evidence);
+        }
+        this.byHorizon = Collections.unmodifiableMap(copy);
+    }
+
+    public static FlowAssessments of(EvidenceAssessment h1s, EvidenceAssessment h5s,
+                                     EvidenceAssessment h15s, EvidenceAssessment h60s) {
+        EnumMap<MarketHorizon, EvidenceAssessment> map = new EnumMap<>(MarketHorizon.class);
+        map.put(MarketHorizon.H1S, requireNonNull(h1s, "1S flow evidence"));
+        map.put(MarketHorizon.H5S, requireNonNull(h5s, "5S flow evidence"));
+        map.put(MarketHorizon.H15S, requireNonNull(h15s, "15S flow evidence"));
+        map.put(MarketHorizon.H60S, requireNonNull(h60s, "60S flow evidence"));
+        return new FlowAssessments(map);
+    }
+
+    /** The FLOW evidence of {@code horizon}; never {@code null}. */
+    public EvidenceAssessment of(MarketHorizon horizon) {
+        return byHorizon.get(requireNonNull(horizon, "horizon"));
+    }
+
+    /** Unmodifiable view in canonical horizon order. */
+    public Map<MarketHorizon, EvidenceAssessment> asMap() {
+        return byHorizon;
+    }
+
+    /** Unmodifiable list in canonical horizon order ({@code 1S, 5S, 15S, 60S}). */
+    public List<EvidenceAssessment> asList() {
+        return List.copyOf(byHorizon.values());
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        return this == o || (o instanceof FlowAssessments other && byHorizon.equals(other.byHorizon));
+    }
+
+    @Override
+    public int hashCode() {
+        return byHorizon.hashCode();
+    }
+
+    @Override
+    public String toString() {
+        return "FlowAssessments" + byHorizon;
+    }
+}

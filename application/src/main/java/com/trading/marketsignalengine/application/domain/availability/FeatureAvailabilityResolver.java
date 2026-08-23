@@ -150,19 +150,11 @@ public final class FeatureAvailabilityResolver {
 
     /**
      * The trade-flow window of the given horizon, or {@code null} when the feature group is absent.
-     * Trade-flow-specific: which {@link TradeFlowFeature} accessor backs which {@link MarketHorizon}.
+     * Delegates to the canonical {@link TradeFlowFeature#window(MarketHorizon)} selection.
      */
     static TradeFlowWindow tradeFlowWindowOf(TradeFlowFeature tradeFlow, MarketHorizon horizon) {
         Objects.requireNonNull(horizon, "horizon");
-        if (tradeFlow == null) {
-            return null;
-        }
-        return switch (horizon) {
-            case H1S -> tradeFlow.window1s();
-            case H5S -> tradeFlow.window5s();
-            case H15S -> tradeFlow.window15s();
-            case H60S -> tradeFlow.window60s();
-        };
+        return tradeFlow == null ? null : tradeFlow.window(horizon);
     }
 
     /**

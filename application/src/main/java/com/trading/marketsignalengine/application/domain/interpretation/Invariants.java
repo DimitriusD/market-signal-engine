@@ -7,6 +7,7 @@ import java.util.Collection;
 import java.util.EnumSet;
 import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Locale;
 import java.util.Set;
 
 /**
@@ -36,6 +37,22 @@ public final class Invariants {
     public static String requireNonBlank(String value, String field) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(field + " must not be blank");
+        }
+        return value;
+    }
+
+    /** Values that are not a version / lineage / hash but an admission that one is missing. */
+    public static final Set<String> PLACEHOLDERS =
+            Set.of("unknown", "todo", "tbd", "n/a", "na", "null", "none", "placeholder");
+
+    /**
+     * A mandatory identifier (interpretation version, config hash, policy version): non-null,
+     * non-blank and not one of the {@link #PLACEHOLDERS} (case-insensitive, trimmed).
+     */
+    public static String requireNotPlaceholder(String value, String field) {
+        requireNonBlank(value, field);
+        if (PLACEHOLDERS.contains(value.trim().toLowerCase(Locale.ROOT))) {
+            throw new IllegalArgumentException(field + " must be a real value, not the placeholder '" + value + "'");
         }
         return value;
     }

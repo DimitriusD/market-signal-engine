@@ -228,6 +228,43 @@ snapshot + `assessedAt` + policy ⇒ same result.
 No directional logic, no opportunity, no V2 runtime path, no live `Clock` wiring yet; V1 (`mse-signals-v8`)
 goldens, metrics and Kafka runtime are unchanged. Details: roadmap §15, "Етап 3".
 
+## Multi-horizon flow evidence (Stage 4, pure, not yet wired)
+
+`application/.../domain/interpretation/flow` is the first V2 directional evidence evaluator:
+`FlowAssessmentEvaluator` turns a **validated** `MarketFeaturesSnapshot`, its Stage 3 `QualityAssessment`
+and an explicit, versioned `FlowAssessmentPolicy` into `FlowAssessments` — exactly one `FLOW`
+`EvidenceAssessment` per `MarketHorizon` (`1S, 5S, 15S, 60S`, canonical order, fail-fast lookup,
+immutable, value equality). Pure and deterministic (no Spring/Kafka/Avro/`Clock`/metrics): same input +
+policy ⇒ value-equal result. The output is heuristic **evidence** — not a probability, not a confidence,
+not BUY/SELL, not an opportunity.
+
+- **Policy** (`FlowAssessmentPolicy`, `FlowHorizonPolicy` per horizon; `BigDecimal` only, no defaults, no
+  production values yet): `policyVersion` (non-blank, not a placeholder), and per horizon
+  `bullishImbalanceThreshold ∈ (0,1]`, `bearishImbalanceThreshold ∈ [-1,0)` (strictly below bullish),
+  `minTradeCount > 0`, `minAggressiveTradeCount ≥ 0`, `maxUnknownSideRatio ∈ [0,1]`. Missing / duplicate
+  horizon fails fast. Thresholds are not calibrated; tests use an explicit fixture policy.
+- **Eligibility first.** A horizon that Stage 3 did not mark `ELIGIBLE` is projected without reading any
+  feature value — `WARMING_UP`/`UNAVAILABLE → UNAVAILABLE`, `UNTRUSTED → UNTRUSTED`, `FAILED → FAILED`,
+  `UNKNOWN → UNKNOWN` — with direction `UNKNOWN`, no strength and the eligibility reasons kept verbatim.
+- **Per eligible horizon** (window chosen by the single canonical `TradeFlowFeature.window(horizon)`):
+  missing window / `signedFlowImbalance` / activity counts → `UNAVAILABLE` (`FLOW_WINDOW_MISSING`,
+  `FLOW_IMBALANCE_MISSING`, `FLOW_ACTIVITY_COUNTS_MISSING`; `null` is never zero); imbalance outside
+  `[-1,1]`, negative counts or count contradictions → `UNTRUSTED` (`FLOW_IMBALANCE_OUT_OF_RANGE`,
+  `FLOW_ACTIVITY_COUNTS_INVALID`); `tradeCount < minTradeCount` or `aggressiveTradeCount <
+  minAggressiveTradeCount` → `AVAILABLE` + direction `UNKNOWN`, no strength (`FLOW_INSUFFICIENT_ACTIVITY`
+  — **not** NEUTRAL); `unknownSideCount / tradeCount > maxUnknownSideRatio` → `UNTRUSTED`
+  (`FLOW_UNKNOWN_SIDE_RATIO_EXCEEDED`; `ratio == max` still passes; deterministic `BigDecimal` division,
+  scale `max(6, scale(max))`, `CEILING`); then `imbalance >= bullish → BULLISH`, `imbalance <= bearish →
+  BEARISH`, otherwise `NEUTRAL` (boundaries inclusive on the directional side).
+- **Strength** = `|signedFlowImbalance|` for BULLISH/BEARISH, a real `0` for NEUTRAL; an absent strength
+  always means "could not be assessed". No `MIXED` from a single window; `tradeIntensity`,
+  `totalAggressiveVolume`, `signedTradeFlow`, `avgTradeSize`, `vwap` are deliberately not gates or weights
+  in Flow V1.
+
+Momentum/Volatility/Book evaluators, the cross-horizon interpreter, opportunity resolution, the V2 runtime
+path and production policy values are not implemented yet; V1 (`mse-signals-v8`) goldens, metrics and
+Kafka runtime are unchanged. Details: roadmap §15, "Етап 4".
+
 ## Failure behaviour, delivery semantics and metrics
 
 - **Delivery is at-least-once.** The input offset is committed only after the output is
