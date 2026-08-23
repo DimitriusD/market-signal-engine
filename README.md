@@ -328,8 +328,10 @@ Details: roadmap §15, "Етап 5".
 `HorizonInterpretationPolicy` (a pure aggregate of the four evidence policies, no thresholds of its
 own): the evaluator invokes each evidence evaluator itself, exactly once, against the same
 snapshot/assessment pair — there is deliberately no public API accepting independently produced
-evidence containers, so evidence from different snapshots cannot be mixed; all four evidence
-evaluators share one `SnapshotQualityConsistencyGuard` and a mismatched pair fails fast. The result
+evidence containers, so evidence from different snapshots cannot be mixed; every evidence evaluator
+runs the canonical `SnapshotQualityConsistencyGuard` inside its own `evaluate(...)` (guard injection
+stays package-private per evidence package, so no caller can hand one a bypassed guard) and a
+mismatched pair fails fast. The result
 (`HorizonAssessments`, strict immutable four-horizon container with key↔horizon agreement) is
 explainable without re-reading the raw snapshot; the direction/regime reducers are package-private.
 

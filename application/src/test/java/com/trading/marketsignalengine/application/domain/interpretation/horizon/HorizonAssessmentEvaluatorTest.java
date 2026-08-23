@@ -36,12 +36,15 @@ import com.trading.marketsignalengine.application.domain.interpretation.HorizonE
 import com.trading.marketsignalengine.application.domain.interpretation.InterpretationDirection;
 import com.trading.marketsignalengine.application.domain.interpretation.MarketRegime;
 import com.trading.marketsignalengine.application.domain.interpretation.ReasonCode;
+import com.trading.marketsignalengine.application.domain.interpretation.book.BookAssessmentEvaluator;
 import com.trading.marketsignalengine.application.domain.interpretation.book.BookAssessments;
+import com.trading.marketsignalengine.application.domain.interpretation.flow.FlowAssessmentEvaluator;
 import com.trading.marketsignalengine.application.domain.interpretation.flow.FlowAssessments;
+import com.trading.marketsignalengine.application.domain.interpretation.momentum.MomentumAssessmentEvaluator;
 import com.trading.marketsignalengine.application.domain.interpretation.momentum.MomentumAssessments;
 import com.trading.marketsignalengine.application.domain.interpretation.quality.QualityAssessment;
 import com.trading.marketsignalengine.application.domain.interpretation.quality.QualityReasonCodes;
-import com.trading.marketsignalengine.application.domain.interpretation.quality.SnapshotQualityConsistencyGuard;
+import com.trading.marketsignalengine.application.domain.interpretation.volatility.VolatilityAssessmentEvaluator;
 import com.trading.marketsignalengine.application.domain.interpretation.volatility.VolatilityAssessments;
 import com.trading.marketsignalengine.application.domain.model.MarketHorizon;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureDiagnostics;
@@ -52,14 +55,13 @@ import com.trading.marketsignalengine.application.domain.model.feature.TradeFlow
 import com.trading.marketsignalengine.application.domain.rule.SignalRuleTestSupport;
 import java.lang.reflect.Method;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicInteger;
 import org.junit.jupiter.api.Test;
 
 /**
  * Stage 6 orchestration end to end in the domain: one safe public entry point (snapshot + quality +
- * aggregate policy), each evidence evaluator invoked exactly once against the same snapshot,
- * eligibility precedence, direction / book-context / regime composition, evidence completeness and
- * determinism — with the real Stage 3 resolver producing the quality assessment.
+ * aggregate policy), nested evidence value-equal to a direct run of every evidence evaluator on the
+ * same snapshot, eligibility precedence, direction / book-context / regime composition, evidence
+ * completeness and determinism — with the real Stage 3 resolver producing the quality assessment.
  */
 class HorizonAssessmentEvaluatorTest {
 
@@ -102,23 +104,32 @@ class HorizonAssessmentEvaluatorTest {
     // ------------------------------------------------------------------ orchestration boundary
 
     @Test
-    void eachEvidenceEvaluatorRunsExactlyOncePerEvaluation() {
-        AtomicInteger verifications = new AtomicInteger();
-        HorizonAssessmentEvaluator counted = new HorizonAssessmentEvaluator(new SnapshotQualityConsistencyGuard() {
-            @Override
-            public void verify(MarketFeaturesSnapshot snapshot, QualityAssessment qualityAssessment) {
-                verifications.incrementAndGet();
-                super.verify(snapshot, qualityAssessment);
-            }
-        });
-        MarketFeaturesSnapshot snapshot = snapshot("0.60", "6", "5", "0.60", "6");
+    void nestedEvidenceIsExactlyWhatEachEvidenceEvaluatorProducesForThisSnapshot() {
+        // the orchestrator derives every evidence set itself, from this one snapshot/assessment pair:
+        // its nested evidence must be value-equal to a direct run of each evidence evaluator (the
+        // per-evaluator guard-once behaviour is pinned in each evidence package's own tests)
+        MarketFeaturesSnapshot snapshot = snapshot("0.60", "-6", "9", "0.10", "-1");
         QualityAssessment qa = quality(snapshot);
 
-        counted.evaluate(snapshot, qa, POLICY);
+        HorizonAssessments assessments = evaluator.evaluate(snapshot, qa, POLICY);
 
-        // each evidence evaluator verifies once per its own evaluate(...) call (pinned per evaluator),
-        // so exactly four verifications = exactly four evidence-evaluator invocations
-        assertEquals(4, verifications.get(), "flow + momentum + volatility + book, once each");
+        FlowAssessments flow = new FlowAssessmentEvaluator().evaluate(snapshot, qa, POLICY.flowPolicy());
+        MomentumAssessments momentum =
+                new MomentumAssessmentEvaluator().evaluate(snapshot, qa, POLICY.momentumPolicy());
+        VolatilityAssessments volatility =
+                new VolatilityAssessmentEvaluator().evaluate(snapshot, qa, POLICY.volatilityPolicy());
+        BookAssessments book = new BookAssessmentEvaluator().evaluate(snapshot, qa, POLICY.bookPolicy());
+        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
+            HorizonAssessment assessment = assessments.of(horizon);
+            assertEquals(flow.of(horizon),
+                    assessment.evidence(EvidenceDimension.FLOW).orElseThrow(), horizon.wireValue());
+            assertEquals(momentum.of(horizon),
+                    assessment.evidence(EvidenceDimension.MOMENTUM).orElseThrow(), horizon.wireValue());
+            assertEquals(volatility.of(horizon).evidence(),
+                    assessment.evidence(EvidenceDimension.VOLATILITY).orElseThrow(), horizon.wireValue());
+            assertEquals(book.of(horizon),
+                    assessment.evidence(EvidenceDimension.BOOK).orElseThrow(), horizon.wireValue());
+        }
     }
 
     @Test

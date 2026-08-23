@@ -93,8 +93,8 @@ public final class FlowAssessmentEvaluator {
         this(new SnapshotQualityConsistencyGuard());
     }
 
-    /** Production uses the canonical guard; visible so a composing evaluator or test can share / instrument one. */
-    public FlowAssessmentEvaluator(SnapshotQualityConsistencyGuard consistencyGuard) {
+    /** Package-private for tests; production uses the canonical guard. */
+    FlowAssessmentEvaluator(SnapshotQualityConsistencyGuard consistencyGuard) {
         this.consistencyGuard = requireNonNull(consistencyGuard, "consistencyGuard");
     }
 

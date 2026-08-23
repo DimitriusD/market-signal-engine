@@ -71,8 +71,8 @@ public final class VolatilityAssessmentEvaluator {
         this(new SnapshotQualityConsistencyGuard());
     }
 
-    /** Production uses the canonical guard; visible so a composing evaluator or test can share / instrument one. */
-    public VolatilityAssessmentEvaluator(SnapshotQualityConsistencyGuard consistencyGuard) {
+    /** Package-private for tests; production uses the canonical guard. */
+    VolatilityAssessmentEvaluator(SnapshotQualityConsistencyGuard consistencyGuard) {
         this.consistencyGuard = requireNonNull(consistencyGuard, "consistencyGuard");
     }
 

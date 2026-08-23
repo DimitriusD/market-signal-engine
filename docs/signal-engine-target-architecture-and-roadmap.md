@@ -1656,10 +1656,11 @@ book evidence стає eligibility projection (FAILED, reasons verbatim, без 
 `HorizonAssessmentEvaluator.evaluate(snapshot, qualityAssessment, HorizonInterpretationPolicy)`.
 Evaluator сам викликає кожен з чотирьох evidence evaluator-ів рівно один раз для цього самого
 snapshot; public API, що приймає незалежно передані evidence containers, свідомо не існує (containers
-поки без source lineage — їх можна було б змішати з різних snapshots). Всі чотири evidence
-evaluator-и ділять один `SnapshotQualityConsistencyGuard` (counting guard бачить рівно 4 verify на
-evaluation; guard-ctor-и evidence evaluator-ів стали public — guard не ослаблений і не обходиться);
-mismatched snapshot/assessment пара → fail-fast. `HorizonInterpretationPolicy` — versioned aggregate
+поки без source lineage — їх можна було б змішати з різних snapshots). Кожен evidence evaluator
+запускає канонічний `SnapshotQualityConsistencyGuard` у власному `evaluate(...)`; guard-ctor-и
+evidence evaluator-ів лишаються package-private у своїх пакетах (injection-обхід закритий hardening
+fix-ом), а orchestration-тест звіряє nested evidence з прямим запуском кожного evaluator-а на тому
+самому snapshot; mismatched snapshot/assessment пара → fail-fast. `HorizonInterpretationPolicy` — versioned aggregate
 чотирьох policies (pure composition, без власних thresholds і production defaults).
 `HorizonAssessments` — strict immutable container: рівно чотири canonical horizons, key ↔
 `assessment.horizon()`, extra/null keys rejected, value equality.
@@ -1711,11 +1712,12 @@ Horizon reasons описують лише resolution (direction → book context
 не копіюються нагору. Typed `VolatilityLevel` споживається regime resolver-ом до flattening
 volatility evidence у generic список.
 
-Тести: +62 (738 загалом, 0 failures, 0 skipped): direction matrix (confirmed/divergence/
+Тести: +63 (738 загалом, 0 failures, 0 skipped): direction matrix (confirmed/divergence/
 single-source/neutral/insufficient, null-strength, 1S flow-only), book context (support/contradict/
 neutral/non-available/book-alone), regime matrix (усі рядки таблиці), resolution invariants,
 container (incl. key↔horizon mismatch), aggregate policy invariants, orchestration end-to-end з
-реальним Stage 3 resolver (guard 4×/evaluation, mismatch fail-fast, determinism, non-eligible
+реальним Stage 3 resolver (nested evidence ≡ прямі запуски evaluator-ів, mismatch fail-fast,
+determinism, non-eligible
 статуси WARMING_UP/UNAVAILABLE/UNTRUSTED/FAILED e2e — UNKNOWN не досяжний через guard і pinned на
 unit-рівні, partial history gap), reflection-перевірка, що public API не приймає evidence containers.
 

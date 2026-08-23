@@ -36,10 +36,11 @@ import java.util.Map;
  * produced evidence containers — the containers carry no source lineage yet, so such an API would let
  * a caller silently pair evidence computed from different snapshots. Instead this evaluator invokes
  * each of the four evidence evaluators itself, exactly once per {@code evaluate(...)} call, against
- * the same snapshot / assessment pair; every evidence evaluator runs the shared
- * {@link SnapshotQualityConsistencyGuard} (one shared instance here), so a mismatched
- * snapshot/assessment pair fails fast before any horizon is assembled. The direction and regime
- * reducers are package-private on purpose.
+ * the same snapshot / assessment pair; every evidence evaluator runs the canonical
+ * {@link SnapshotQualityConsistencyGuard} inside its own {@code evaluate(...)} (guard injection is
+ * package-private per evidence package — nothing here or anywhere else can hand one a bypassed
+ * guard), so a mismatched snapshot/assessment pair fails fast before any horizon is assembled. The
+ * direction and regime reducers are package-private on purpose.
  *
  * <h2>Per horizon</h2>
  * <ol>
@@ -69,20 +70,11 @@ public final class HorizonAssessmentEvaluator {
     private final BookAssessmentEvaluator bookEvaluator;
 
     public HorizonAssessmentEvaluator() {
-        this(new SnapshotQualityConsistencyGuard());
-    }
-
-    /**
-     * Package-private for tests (a counting guard observes exactly four verifications — one per
-     * evidence evaluator — per evaluation); production uses the canonical guard. The guard is shared,
-     * never bypassed: there is no unchecked entry point.
-     */
-    HorizonAssessmentEvaluator(SnapshotQualityConsistencyGuard consistencyGuard) {
-        requireNonNull(consistencyGuard, "consistencyGuard");
-        this.flowEvaluator = new FlowAssessmentEvaluator(consistencyGuard);
-        this.momentumEvaluator = new MomentumAssessmentEvaluator(consistencyGuard);
-        this.volatilityEvaluator = new VolatilityAssessmentEvaluator(consistencyGuard);
-        this.bookEvaluator = new BookAssessmentEvaluator(consistencyGuard);
+        // the safe default constructors: each evidence evaluator carries the canonical guard
+        this.flowEvaluator = new FlowAssessmentEvaluator();
+        this.momentumEvaluator = new MomentumAssessmentEvaluator();
+        this.volatilityEvaluator = new VolatilityAssessmentEvaluator();
+        this.bookEvaluator = new BookAssessmentEvaluator();
     }
 
     /**

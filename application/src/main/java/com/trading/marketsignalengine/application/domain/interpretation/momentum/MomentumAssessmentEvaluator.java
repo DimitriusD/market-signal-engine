@@ -95,8 +95,8 @@ public final class MomentumAssessmentEvaluator {
         this(new SnapshotQualityConsistencyGuard());
     }
 
-    /** Production uses the canonical guard; visible so a composing evaluator or test can share / instrument one. */
-    public MomentumAssessmentEvaluator(SnapshotQualityConsistencyGuard consistencyGuard) {
+    /** Package-private for tests; production uses the canonical guard. */
+    MomentumAssessmentEvaluator(SnapshotQualityConsistencyGuard consistencyGuard) {
         this.consistencyGuard = requireNonNull(consistencyGuard, "consistencyGuard");
     }
 
