@@ -1375,6 +1375,17 @@ clamp, skew over stale, policy matrix, futureEvent block/allow, immutability, de
 dedup. Stage 1 availability і Stage 2 invariant tests без змін; golden files byte-for-byte unchanged;
 V1 engine/metrics/Kafka runtime не змінені (V2 resolvers ще не підключені до runtime path).
 
+**Stage 3 hardening** (окремий fix-commit, policy table / eligibility semantics / V1 без змін; 399 tests):
+(1) `QualityAssessment` більше не має власного `reasonCodes` component — overall reasons мають єдине
+джерело `interpretationQuality.reasonCodes()`, `assessment.reasonCodes()` читає саме його (divergence між
+Avro mapper і analytics неможлива); (2) `TimingAssessment` enforce-ить status ↔ reason matrix:
+`STALE` ⇒ містить `FEATURE_SNAPSHOT_STALE` або `PROCESSING_LATENCY_EXCEEDED`; `CLOCK_SKEW` ⇒ містить
+`SOURCE_CLOCK_SKEW`, а при negative age — ще й `SOURCE_FUTURE_EVENT`; `FRESH` ⇒ без reasons; `UNKNOWN` —
+fail-closed fallback без нових codes (thresholds лишаються в resolver); (3) `QualityEligibilityPolicy`
+приймає лише durations з whole-millisecond precision і ≥ 1 ms: `Duration.ofNanos(1)` / `1_500_000 ns`
+→ `IllegalArgumentException` (раніше мовчки ставали 0 ms / 1 ms), `toMillis()` overflow → зрозумілий
+`IllegalArgumentException`; inclusive threshold (`<= limit` FRESH, `> limit` STALE) без змін.
+
 **Не входить в Етап 3 (Етап 4+):** Flow/Momentum/Volatility/Book evaluators, directional scores,
 BULLISH/BEARISH, EvidenceStrength calculation, CrossHorizonInterpreter, MarketRegimeResolver,
 OpportunityResolver, runtime assembler `MarketInterpretationSnapshot` (жодних штучних snapshots з

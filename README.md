@@ -210,7 +210,13 @@ snapshot + `assessedAt` + policy ⇒ same result.
 - **Timing** (`TimingAssessment`): `featureAgeMs = assessedAt − evaluationTs`,
   `processingLatencyMs = assessedAt − computedAt`; negative values are reported, never clamped, and mean
   `CLOCK_SKEW` (wins over `STALE`); thresholds are inclusive (`age <= max` fresh, `age > max` stale).
-  `evaluationTs` (market as-of) and `assessedAt` (engine assessment instant) are never confused.
+  `evaluationTs` (market as-of) and `assessedAt` (engine assessment instant) are never confused. The record
+  enforces status ↔ reason consistency: `STALE` carries `FEATURE_SNAPSHOT_STALE` and/or
+  `PROCESSING_LATENCY_EXCEEDED`, `CLOCK_SKEW` carries `SOURCE_CLOCK_SKEW` (plus `SOURCE_FUTURE_EVENT` when the
+  age is negative), `FRESH` carries none. Policy durations must be whole milliseconds and at least 1 ms
+  (sub-/fractional-millisecond durations are rejected instead of silently truncating).
+- **Overall reason codes** live only in `QualityAssessment.interpretationQuality().reasonCodes()`;
+  `QualityAssessment.reasonCodes()` is a read-through view, so there is exactly one explanation list.
 - **Global policy**: `NO_DATA → NO_DATA`; `UNSAFE` / clock skew / stale / (policy-blocked) future event →
   `BLOCKED`, never eligible; source `OK` + all horizons eligible + fresh → `OK`; otherwise `DEGRADED`,
   eligible for trading iff at least one horizon is `ELIGIBLE` (meaning only that interpretation may

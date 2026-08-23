@@ -6,7 +6,6 @@ import static com.trading.marketsignalengine.application.domain.interpretation.I
 import com.trading.marketsignalengine.application.domain.interpretation.HorizonEligibility;
 import com.trading.marketsignalengine.application.domain.interpretation.InterpretationQuality;
 import com.trading.marketsignalengine.application.domain.interpretation.InterpretationQualityStatus;
-import com.trading.marketsignalengine.application.domain.interpretation.Invariants;
 import com.trading.marketsignalengine.application.domain.interpretation.ReasonCode;
 import com.trading.marketsignalengine.application.domain.model.MarketHorizon;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus;
@@ -18,8 +17,11 @@ import java.util.Set;
  * The internal result of the quality layer for one validated feature snapshot: the upstream
  * aggregate status, the engine's overall {@link InterpretationQuality} (Stage 2 model), the
  * {@link TimingAssessment}, exactly four {@link HorizonEligibility} verdicts, the typed failed feature
- * groups, the upstream future-event flag and the overall reason codes. Internal model, not an Avro
- * DTO; immutable.
+ * groups and the upstream future-event flag. Internal model, not an Avro DTO; immutable.
+ *
+ * <p>The overall reason codes have exactly one source of truth: {@link InterpretationQuality#reasonCodes()}.
+ * {@link #reasonCodes()} is a convenience view of that list (same instance, immutable, producer order),
+ * so an Avro mapper and internal explainability can never read two different explanations.
  *
  * <p>Structural invariants (the policy itself lives in {@link QualityAssessmentResolver}):
  * {@code eligibleForTrading = true} requires at least one ELIGIBLE horizon; status {@code OK} requires
@@ -33,8 +35,7 @@ public record QualityAssessment(
         TimingAssessment timing,
         HorizonEligibilities horizonEligibilities,
         List<FeatureGroupId> failedFeatureGroups,
-        boolean futureEventDetected,
-        List<ReasonCode> reasonCodes) {
+        boolean futureEventDetected) {
 
     public QualityAssessment {
         requireNonNull(sourceQualityStatus, "sourceQualityStatus");
@@ -42,7 +43,6 @@ public record QualityAssessment(
         requireNonNull(timing, "timing");
         requireNonNull(horizonEligibilities, "horizonEligibilities");
         failedFeatureGroups = distinctGroups(failedFeatureGroups);
-        reasonCodes = Invariants.reasonCodes(reasonCodes, "qualityAssessment.reasonCodes");
 
         boolean eligible = interpretationQuality.eligibleForTrading();
         require(!eligible || horizonEligibilities.anyEligible(),
@@ -66,6 +66,14 @@ public record QualityAssessment(
     /** Whether interpretation may continue (not: whether an opportunity exists). */
     public boolean eligibleForTrading() {
         return interpretationQuality.eligibleForTrading();
+    }
+
+    /**
+     * The overall reason codes — the single authoritative list, read through from
+     * {@link InterpretationQuality#reasonCodes()} (immutable, deterministic producer order).
+     */
+    public List<ReasonCode> reasonCodes() {
+        return interpretationQuality.reasonCodes();
     }
 
     public HorizonEligibility eligibilityOf(MarketHorizon horizon) {

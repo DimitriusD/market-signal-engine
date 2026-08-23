@@ -6,6 +6,7 @@ import static com.trading.marketsignalengine.application.domain.interpretation.q
 import static com.trading.marketsignalengine.application.domain.interpretation.quality.QualityFixtures.POLICY;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
@@ -14,6 +15,7 @@ import com.trading.marketsignalengine.application.domain.interpretation.Interpre
 import com.trading.marketsignalengine.application.domain.interpretation.ReasonCode;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureDiagnostics;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus;
+import java.lang.reflect.RecordComponent;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -39,16 +41,16 @@ class QualityAssessmentInvariantsTest {
         InterpretationQuality degradedEligible = InterpretationQuality.degraded(true, List.of());
 
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(
-                FeatureQualityStatus.DEGRADED, degradedEligible, FRESH, NONE_ELIGIBLE, List.of(), false, List.of()));
+                FeatureQualityStatus.DEGRADED, degradedEligible, FRESH, NONE_ELIGIBLE, List.of(), false));
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(
-                FeatureQualityStatus.DEGRADED, degradedEligible, STALE, ALL_ELIGIBLE, List.of(), false, List.of()));
+                FeatureQualityStatus.DEGRADED, degradedEligible, STALE, ALL_ELIGIBLE, List.of(), false));
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(
-                FeatureQualityStatus.UNSAFE, degradedEligible, FRESH, ALL_ELIGIBLE, List.of(), false, List.of()));
+                FeatureQualityStatus.UNSAFE, degradedEligible, FRESH, ALL_ELIGIBLE, List.of(), false));
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(
-                FeatureQualityStatus.NO_DATA, degradedEligible, FRESH, ALL_ELIGIBLE, List.of(), false, List.of()));
+                FeatureQualityStatus.NO_DATA, degradedEligible, FRESH, ALL_ELIGIBLE, List.of(), false));
 
         QualityAssessment legal = new QualityAssessment(
-                FeatureQualityStatus.DEGRADED, degradedEligible, FRESH, PARTIAL, List.of(), false, List.of());
+                FeatureQualityStatus.DEGRADED, degradedEligible, FRESH, PARTIAL, List.of(), false);
         assertTrue(legal.eligibleForTrading());
     }
 
@@ -57,16 +59,16 @@ class QualityAssessmentInvariantsTest {
         InterpretationQuality ok = InterpretationQuality.ok(List.of());
 
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(
-                FeatureQualityStatus.OK, ok, FRESH, PARTIAL, List.of(), false, List.of()));
+                FeatureQualityStatus.OK, ok, FRESH, PARTIAL, List.of(), false));
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(
-                FeatureQualityStatus.OK, ok, FRESH, ALL_ELIGIBLE, List.of(FeatureGroupId.BBO), false, List.of()));
+                FeatureQualityStatus.OK, ok, FRESH, ALL_ELIGIBLE, List.of(FeatureGroupId.BBO), false));
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(
-                FeatureQualityStatus.OK, ok, FRESH, ALL_ELIGIBLE, List.of(), true, List.of()));
+                FeatureQualityStatus.OK, ok, FRESH, ALL_ELIGIBLE, List.of(), true));
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(
-                FeatureQualityStatus.OK, ok, STALE, ALL_ELIGIBLE, List.of(), false, List.of()));
+                FeatureQualityStatus.OK, ok, STALE, ALL_ELIGIBLE, List.of(), false));
 
         QualityAssessment legal = new QualityAssessment(
-                FeatureQualityStatus.OK, ok, FRESH, ALL_ELIGIBLE, List.of(), false, List.of());
+                FeatureQualityStatus.OK, ok, FRESH, ALL_ELIGIBLE, List.of(), false);
         assertEquals(List.of(), legal.failedFeatureGroups());
     }
 
@@ -75,24 +77,43 @@ class QualityAssessmentInvariantsTest {
         InterpretationQuality blocked = InterpretationQuality.blocked(List.of(QualityReasonCodes.SOURCE_QUALITY_UNSAFE));
 
         QualityAssessment assessment = new QualityAssessment(FeatureQualityStatus.UNSAFE, blocked, STALE, ALL_ELIGIBLE,
-                List.of(FeatureGroupId.BBO), true, List.of(QualityReasonCodes.SOURCE_QUALITY_UNSAFE));
+                List.of(FeatureGroupId.BBO), true);
         assertFalse(assessment.eligibleForTrading());
 
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(FeatureQualityStatus.UNSAFE, blocked,
-                STALE, ALL_ELIGIBLE, List.of(FeatureGroupId.BBO, FeatureGroupId.BBO), true, List.of()));
+                STALE, ALL_ELIGIBLE, List.of(FeatureGroupId.BBO, FeatureGroupId.BBO), true));
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(FeatureQualityStatus.UNSAFE, blocked,
-                STALE, ALL_ELIGIBLE, Arrays.asList(FeatureGroupId.BBO, null), true, List.of()));
-        assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(FeatureQualityStatus.UNSAFE, blocked,
-                STALE, ALL_ELIGIBLE, List.of(), true,
-                List.of(QualityReasonCodes.SOURCE_QUALITY_UNSAFE, QualityReasonCodes.SOURCE_QUALITY_UNSAFE)));
+                STALE, ALL_ELIGIBLE, Arrays.asList(FeatureGroupId.BBO, null), true));
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(null, blocked, STALE, ALL_ELIGIBLE,
-                List.of(), true, List.of()));
+                List.of(), true));
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(FeatureQualityStatus.UNSAFE, null,
-                STALE, ALL_ELIGIBLE, List.of(), true, List.of()));
+                STALE, ALL_ELIGIBLE, List.of(), true));
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(FeatureQualityStatus.UNSAFE, blocked,
-                null, ALL_ELIGIBLE, List.of(), true, List.of()));
+                null, ALL_ELIGIBLE, List.of(), true));
         assertThrows(IllegalArgumentException.class, () -> new QualityAssessment(FeatureQualityStatus.UNSAFE, blocked,
-                STALE, null, List.of(), true, List.of()));
+                STALE, null, List.of(), true));
+    }
+
+    @Test
+    void overallReasonCodesHaveExactlyOneSourceOfTruth() {
+        List<ReasonCode> reasons = List.of(QualityReasonCodes.SOURCE_QUALITY_UNSAFE, QualityReasonCodes.FEATURE_GROUP_FAILURE);
+        InterpretationQuality blocked = InterpretationQuality.blocked(reasons);
+        QualityAssessment assessment = new QualityAssessment(FeatureQualityStatus.UNSAFE, blocked, STALE, ALL_ELIGIBLE,
+                List.of(FeatureGroupId.BBO), false);
+
+        // The accessor reads through to InterpretationQuality: same list, same order, immutable.
+        assertSame(assessment.interpretationQuality().reasonCodes(), assessment.reasonCodes());
+        assertEquals(reasons, assessment.reasonCodes());
+        assertThrows(UnsupportedOperationException.class, () -> assessment.reasonCodes().add(ReasonCode.of("X")));
+
+        // No record component can hold a second, divergent copy of the overall reasons.
+        List<String> components = Arrays.stream(QualityAssessment.class.getRecordComponents())
+                .map(RecordComponent::getName)
+                .toList();
+        assertFalse(components.contains("reasonCodes"),
+                "QualityAssessment must not store overall reason codes next to interpretationQuality: " + components);
+        assertEquals(List.of("sourceQualityStatus", "interpretationQuality", "timing", "horizonEligibilities",
+                "failedFeatureGroups", "futureEventDetected"), components);
     }
 
     @Test
@@ -100,7 +121,7 @@ class QualityAssessmentInvariantsTest {
         List<FeatureGroupId> groups = new ArrayList<>(List.of(FeatureGroupId.BBO));
         List<ReasonCode> reasons = new ArrayList<>(List.of(QualityReasonCodes.FEATURE_GROUP_FAILURE));
         QualityAssessment assessment = new QualityAssessment(FeatureQualityStatus.DEGRADED,
-                InterpretationQuality.degraded(true, reasons), FRESH, ALL_ELIGIBLE, groups, false, reasons);
+                InterpretationQuality.degraded(true, reasons), FRESH, ALL_ELIGIBLE, groups, false);
 
         groups.add(FeatureGroupId.ORDER_BOOK);
         reasons.add(QualityReasonCodes.SOURCE_QUALITY_DEGRADED);

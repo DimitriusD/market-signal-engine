@@ -107,7 +107,7 @@ public final class QualityAssessmentResolver {
         }
 
         return new QualityAssessment(sourceStatus, interpretationQuality, timing, horizons,
-                failedGroups, futureEvent, reasons);
+                failedGroups, futureEvent);
     }
 
     private static void addDistinct(List<ReasonCode> target, List<ReasonCode> codes) {
