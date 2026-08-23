@@ -1495,16 +1495,25 @@ MarketFeaturesSnapshot + QualityAssessment (Етап 3) + FlowAssessmentPolicy
    **не** є gates і не впливають на direction/strength — production thresholds або weights для них без
    replay не вигадуються.
 10. **Результат** — `FlowAssessments`: рівно чотири horizons, canonical order, fail-fast lookup,
-    лише `FLOW` dimension, immutable, value equality; не raw `Map`.
+    лише `FLOW` dimension, immutable, value equality; не raw `Map`. Map із entries поза чотирма
+    canonical keys (напр., `null` key) відхиляється — нічого не дропається мовчки.
+11. **Consistency guard.** Snapshot і `QualityAssessment` приходять окремими аргументами, тому
+    evaluator перевіряє, що assessment створений саме з цього snapshot: `sourceQualityStatus`,
+    `futureEventDetected`, `timing.sourceEvaluationAt`/`sourceComputedAt` ↔
+    `evaluationTs`/`computedAt`, `failedFeatureGroups`; mismatched пара (напр., all-ELIGIBLE
+    assessment snapshot A + UNSAFE/stale flow values snapshot B) → fail-fast, а не bullish evidence.
+    Це structural cross-check; повна lineage-прив'язка (typed Stage 3 result, `sourceFeatureEventId`)
+    — етап runtime assembler.
 
-Тести: +104 (503 загалом, 0 failures): `FlowHorizonPolicyTest` (17), `FlowAssessmentPolicyTest` (16),
-`FlowAssessmentsTest` (5), `FlowReasonCodesTest` (2), `FlowAssessmentEvaluatorTest` (62: eligibility
+Тести: +106 (505 загалом, 0 failures): `FlowHorizonPolicyTest` (17), `FlowAssessmentPolicyTest` (16),
+`FlowAssessmentsTest` (6), `FlowReasonCodesTest` (2), `FlowAssessmentEvaluatorTest` (63: eligibility
 projection для кожного non-ELIGIBLE status; non-eligible horizon не читає навіть corrupt values; null
 ≠ zero/neutral; zero imbalance → NEUTRAL/0; low activity → UNKNOWN, не NEUTRAL; bullish/bearish
 `−ε / exact / +ε` для всіх чотирьох горизонтів; exact `maxUnknownSideRatio` проходить, вище —
 UNTRUSTED; negative counts, count contradictions, out-of-range imbalance → UNTRUSTED; strength =
 |imbalance|; determinism; різні verdicts на різних горизонтах за однакового flow; інтеграція з реальним
-Stage 3 resolver: partial warm-up, stale trades, failed `trade-flow`, NO_DATA), `TradeFlowFeatureTest`
+Stage 3 resolver: partial warm-up, stale trades, failed `trade-flow`, NO_DATA; mismatched
+snapshot/assessment пара rejected), `TradeFlowFeatureTest`
 (2). Stage 1 availability, Stage 2 invariants і Stage 3 quality tests без змін; golden files
 byte-for-byte unchanged.
 

@@ -9,8 +9,11 @@ import com.trading.marketsignalengine.application.domain.interpretation.Evidence
 import com.trading.marketsignalengine.application.domain.interpretation.HorizonEligibility;
 import com.trading.marketsignalengine.application.domain.interpretation.InterpretationDirection;
 import com.trading.marketsignalengine.application.domain.interpretation.ReasonCode;
+import com.trading.marketsignalengine.application.domain.interpretation.quality.FeatureGroupId;
 import com.trading.marketsignalengine.application.domain.interpretation.quality.QualityAssessment;
 import com.trading.marketsignalengine.application.domain.model.MarketHorizon;
+import com.trading.marketsignalengine.application.domain.model.feature.FeatureQuality;
+import com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus;
 import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowFeature;
 import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowWindow;
@@ -21,6 +24,7 @@ import java.util.EnumMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -75,6 +79,10 @@ import java.util.Set;
  * reversal and cross-horizon conflicts belong to the cross-horizon layer. The snapshot-level quality
  * status ({@code BLOCKED}, {@code eligibleForTrading}) is not re-applied here — it is a fact about the
  * snapshot the opportunity layer enforces, while this evidence is a fact about one eligible window.
+ *
+ * <p>The snapshot and its {@link QualityAssessment} arrive as two arguments, so the evaluator
+ * cross-checks that the assessment was produced from this snapshot (see
+ * {@link #requireAssessmentOfSnapshot}) and fails fast on a mismatched pair.
  */
 public final class FlowAssessmentEvaluator {
 
@@ -97,6 +105,7 @@ public final class FlowAssessmentEvaluator {
         requireNonNull(snapshot, "snapshot");
         requireNonNull(qualityAssessment, "qualityAssessment");
         requireNonNull(policy, "flow policy");
+        requireAssessmentOfSnapshot(snapshot, qualityAssessment);
         Map<MarketHorizon, EvidenceAssessment> result = new EnumMap<>(MarketHorizon.class);
         for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
             result.put(horizon, evaluate(snapshot, qualityAssessment, policy, horizon));
@@ -113,6 +122,7 @@ public final class FlowAssessmentEvaluator {
         requireNonNull(qualityAssessment, "qualityAssessment");
         requireNonNull(policy, "flow policy");
         requireNonNull(horizon, "horizon");
+        requireAssessmentOfSnapshot(snapshot, qualityAssessment);
 
         // 1. Eligibility precedence: no feature value is read for a non-ELIGIBLE horizon.
         HorizonEligibility eligibility = qualityAssessment.eligibilityOf(horizon);
@@ -183,6 +193,42 @@ public final class FlowAssessmentEvaluator {
         }
         return EvidenceAssessment.available(EvidenceDimension.FLOW, InterpretationDirection.NEUTRAL,
                 EvidenceStrength.MIN, concat(inherited, FlowReasonCodes.FLOW_NEUTRAL_IMBALANCE));
+    }
+
+    /**
+     * Consistency guard: the {@link QualityAssessment} must have been produced from <em>this</em>
+     * snapshot. The two are separate arguments (Stage 3 returns a standalone assessment), so a caller
+     * could otherwise pair a fresh, all-ELIGIBLE assessment of snapshot A with the feature values of an
+     * UNSAFE / stale snapshot B and mint directional evidence from data the quality layer never
+     * cleared. Every source fact the assessment carries is compared against the snapshot:
+     * {@code sourceQualityStatus}, {@code futureEventDetected}, {@code timing.sourceEvaluationAt}
+     * ({@code evaluationTs}), {@code timing.sourceComputedAt} ({@code computedAt}) and the failed
+     * feature groups. This is a structural cross-check, not full lineage binding — a typed Stage 3
+     * result carrying the snapshot (and, on the wire, {@code sourceFeatureEventId}) is the runtime
+     * assembler's job. Package-visible for tests.
+     */
+    static void requireAssessmentOfSnapshot(MarketFeaturesSnapshot snapshot, QualityAssessment qualityAssessment) {
+        FeatureQuality quality = snapshot.quality();
+        FeatureQualityStatus expectedStatus = quality == null ? null : quality.status();
+        requireMatch(qualityAssessment.sourceQualityStatus() == expectedStatus,
+                "sourceQualityStatus", expectedStatus, qualityAssessment.sourceQualityStatus());
+        boolean expectedFutureEvent = quality != null && quality.futureEventDetected();
+        requireMatch(qualityAssessment.futureEventDetected() == expectedFutureEvent,
+                "futureEventDetected", expectedFutureEvent, qualityAssessment.futureEventDetected());
+        requireMatch(Objects.equals(qualityAssessment.timing().sourceEvaluationAt(), snapshot.evaluationTs()),
+                "timing.sourceEvaluationAt", snapshot.evaluationTs(), qualityAssessment.timing().sourceEvaluationAt());
+        requireMatch(Objects.equals(qualityAssessment.timing().sourceComputedAt(), snapshot.computedAt()),
+                "timing.sourceComputedAt", snapshot.computedAt(), qualityAssessment.timing().sourceComputedAt());
+        requireMatch(qualityAssessment.failedFeatureGroups().equals(FeatureGroupId.failedGroupsOf(snapshot.diagnostics())),
+                "failedFeatureGroups", FeatureGroupId.failedGroupsOf(snapshot.diagnostics()),
+                qualityAssessment.failedFeatureGroups());
+    }
+
+    private static void requireMatch(boolean matches, String fact, Object fromSnapshot, Object fromAssessment) {
+        if (!matches) {
+            throw new IllegalArgumentException("qualityAssessment was not produced from this snapshot: "
+                    + fact + " is '" + fromAssessment + "' but the snapshot says '" + fromSnapshot + "'");
+        }
     }
 
     /** Eligibility status → evidence availability for a non-ELIGIBLE horizon (ELIGIBLE is never projected). */

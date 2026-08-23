@@ -14,7 +14,8 @@ import java.util.Map;
 /**
  * The typed result of {@link FlowAssessmentEvaluator}: exactly one {@code FLOW}
  * {@link EvidenceAssessment} per {@link MarketHorizon}, always in canonical order
- * ({@code 1S, 5S, 15S, 60S}). A missing horizon or a non-FLOW dimension fails fast; a duplicate cannot
+ * ({@code 1S, 5S, 15S, 60S}). A missing horizon, a non-FLOW dimension or a map entry beyond the four
+ * canonical keys (e.g. a {@code null} key) fails fast — nothing is silently dropped; a duplicate cannot
  * exist (the only ways to build one are a per-horizon map or the four-argument factory). Lookups never
  * return {@code null}. Immutable; value equality, so two evaluations of the same input and policy
  * compare equal.
@@ -33,6 +34,9 @@ public final class FlowAssessments {
                     horizon.wireValue() + " flow assessment must have dimension FLOW, got " + evidence.dimension());
             copy.put(horizon, evidence);
         }
+        // fail fast instead of silently dropping anything beyond the four canonical keys (e.g. a null key)
+        require(byHorizon.size() == copy.size(),
+                "flow assessments must contain exactly the four canonical horizons, got keys " + byHorizon.keySet());
         this.byHorizon = Collections.unmodifiableMap(copy);
     }
 

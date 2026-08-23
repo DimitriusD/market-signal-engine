@@ -105,6 +105,54 @@ class FlowAssessmentEvaluatorTest {
     }
 
     @Test
+    void qualityAssessmentOfAnotherSnapshotIsRejected() {
+        // snapshot B: UNSAFE source with a strongly bullish flow; assessment A: all-ELIGIBLE, source OK.
+        // Pairing them must fail fast instead of minting bullish evidence the quality layer never cleared.
+        MarketFeaturesSnapshot unsafe = SignalRuleTestSupport.tradableFeaturesBuilder()
+                .tradeFlow(uniform(active("0.90")))
+                .quality(SignalRuleTestSupport.tradableQuality().toBuilder()
+                        .status(FeatureQualityStatus.UNSAFE).qualityReasons(List.of("BOOK_UNTRUSTED")).build())
+                .build();
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class,
+                () -> evaluator.evaluate(unsafe, allEligible(), POLICY));
+        assertTrue(ex.getMessage().contains("sourceQualityStatus"), ex.getMessage());
+        assertTrue(ex.getMessage().contains("not produced from this snapshot"), ex.getMessage());
+
+        // different market as-of / computed instants
+        MarketFeaturesSnapshot otherAsOf = SignalRuleTestSupport.tradableFeaturesBuilder()
+                .tradeFlow(uniform(active("0.90"))).evaluationTs(FlowFixtures.EVENT_TIME.plusMillis(7)).build();
+        assertTrue(assertThrows(IllegalArgumentException.class,
+                        () -> evaluator.evaluate(otherAsOf, allEligible(), POLICY, H5S))
+                .getMessage().contains("timing.sourceEvaluationAt"));
+        MarketFeaturesSnapshot otherComputedAt = SignalRuleTestSupport.tradableFeaturesBuilder()
+                .tradeFlow(uniform(active("0.90"))).computedAt(FlowFixtures.COMPUTED_AT.plusMillis(7)).build();
+        assertTrue(assertThrows(IllegalArgumentException.class,
+                        () -> evaluator.evaluate(otherComputedAt, allEligible(), POLICY, H5S))
+                .getMessage().contains("timing.sourceComputedAt"));
+
+        // upstream future-event flag and failed feature groups must agree as well
+        MarketFeaturesSnapshot futureEvent = SignalRuleTestSupport.tradableFeaturesBuilder()
+                .tradeFlow(uniform(active("0.90")))
+                .quality(SignalRuleTestSupport.tradableQuality().toBuilder().futureEventDetected(true).build())
+                .build();
+        assertTrue(assertThrows(IllegalArgumentException.class,
+                        () -> evaluator.evaluate(futureEvent, allEligible(), POLICY))
+                .getMessage().contains("futureEventDetected"));
+        MarketFeaturesSnapshot failedBbo = SignalRuleTestSupport.tradableFeaturesBuilder()
+                .tradeFlow(uniform(active("0.90")))
+                .diagnostics(FeatureDiagnostics.builder().failedFeatureGroups(List.of("bbo")).totalFeatureGroups(4).build())
+                .build();
+        assertTrue(assertThrows(IllegalArgumentException.class,
+                        () -> evaluator.evaluate(failedBbo, allEligible(), POLICY))
+                .getMessage().contains("failedFeatureGroups"));
+
+        // the matching pair from the real Stage 3 resolver passes
+        assertEquals(InterpretationDirection.BULLISH,
+                evaluator.evaluate(snapshot(uniform(active("0.90"))), quality(snapshot(uniform(active("0.90")))), POLICY, H5S)
+                        .direction());
+    }
+
+    @Test
     void resultCollectionsAreImmutable() {
         MarketFeaturesSnapshot snapshot = snapshot(uniform(active("0.50")));
         FlowAssessments assessments = evaluator.evaluate(snapshot, quality(snapshot), POLICY);

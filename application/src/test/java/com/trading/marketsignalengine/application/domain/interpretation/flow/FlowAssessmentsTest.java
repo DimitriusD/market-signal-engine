@@ -64,6 +64,19 @@ class FlowAssessmentsTest {
     }
 
     @Test
+    void entriesBeyondTheFourCanonicalKeysAreRejectedNotSilentlyDropped() {
+        Map<MarketHorizon, EvidenceAssessment> withNullKey = new HashMap<>();
+        withNullKey.put(H1S, BULLISH);
+        withNullKey.put(H5S, BULLISH);
+        withNullKey.put(H15S, NEUTRAL);
+        withNullKey.put(H60S, MISSING);
+        withNullKey.put(null, NEUTRAL);
+
+        IllegalArgumentException ex = assertThrows(IllegalArgumentException.class, () -> new FlowAssessments(withNullKey));
+        assertTrue(ex.getMessage().contains("exactly the four canonical horizons"), ex.getMessage());
+    }
+
+    @Test
     void rejectsNonFlowDimension() {
         EvidenceAssessment momentum = EvidenceAssessment.unavailable(EvidenceDimension.MOMENTUM, List.of());
 

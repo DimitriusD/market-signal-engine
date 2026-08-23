@@ -234,8 +234,12 @@ goldens, metrics and Kafka runtime are unchanged. Details: roadmap §15, "Ета
 `FlowAssessmentEvaluator` turns a **validated** `MarketFeaturesSnapshot`, its Stage 3 `QualityAssessment`
 and an explicit, versioned `FlowAssessmentPolicy` into `FlowAssessments` — exactly one `FLOW`
 `EvidenceAssessment` per `MarketHorizon` (`1S, 5S, 15S, 60S`, canonical order, fail-fast lookup,
-immutable, value equality). Pure and deterministic (no Spring/Kafka/Avro/`Clock`/metrics): same input +
-policy ⇒ value-equal result. The output is heuristic **evidence** — not a probability, not a confidence,
+immutable, value equality; extra map entries rejected). Pure and deterministic (no
+Spring/Kafka/Avro/`Clock`/metrics): same input + policy ⇒ value-equal result. The evaluator
+cross-checks that the `QualityAssessment` was produced from the given snapshot (source status,
+future-event flag, `evaluationTs`/`computedAt`, failed feature groups) and fails fast on a mismatched
+pair; full lineage binding via a typed Stage 3 result / `sourceFeatureEventId` comes with the runtime
+assembler. The output is heuristic **evidence** — not a probability, not a confidence,
 not BUY/SELL, not an opportunity.
 
 - **Policy** (`FlowAssessmentPolicy`, `FlowHorizonPolicy` per horizon; `BigDecimal` only, no defaults, no
