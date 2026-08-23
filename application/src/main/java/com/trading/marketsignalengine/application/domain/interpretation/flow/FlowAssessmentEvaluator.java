@@ -3,19 +3,15 @@ package com.trading.marketsignalengine.application.domain.interpretation.flow;
 import static com.trading.marketsignalengine.application.domain.interpretation.Invariants.requireNonNull;
 
 import com.trading.marketsignalengine.application.domain.interpretation.EvidenceAssessment;
-import com.trading.marketsignalengine.application.domain.interpretation.EvidenceAvailabilityStatus;
 import com.trading.marketsignalengine.application.domain.interpretation.EvidenceDimension;
+import com.trading.marketsignalengine.application.domain.interpretation.EvidenceEligibilityProjection;
 import com.trading.marketsignalengine.application.domain.interpretation.EvidenceStrength;
 import com.trading.marketsignalengine.application.domain.interpretation.HorizonEligibility;
 import com.trading.marketsignalengine.application.domain.interpretation.InterpretationDirection;
 import com.trading.marketsignalengine.application.domain.interpretation.ReasonCode;
-import com.trading.marketsignalengine.application.domain.interpretation.quality.FeatureGroupId;
-import com.trading.marketsignalengine.application.domain.interpretation.quality.HorizonEligibilities;
-import com.trading.marketsignalengine.application.domain.interpretation.quality.HorizonEligibilityResolver;
 import com.trading.marketsignalengine.application.domain.interpretation.quality.QualityAssessment;
+import com.trading.marketsignalengine.application.domain.interpretation.quality.SnapshotQualityConsistencyGuard;
 import com.trading.marketsignalengine.application.domain.model.MarketHorizon;
-import com.trading.marketsignalengine.application.domain.model.feature.FeatureQuality;
-import com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus;
 import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowFeature;
 import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowWindow;
@@ -26,7 +22,6 @@ import java.util.EnumMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
 
 /**
@@ -40,10 +35,9 @@ import java.util.Set;
  * <h2>Per-horizon pipeline (first match wins)</h2>
  * <ol>
  *   <li><b>Eligibility precedence.</b> The horizon's {@link HorizonEligibility} is read first. A
- *       non-ELIGIBLE horizon is projected without reading any feature value:
- *       {@code WARMING_UP / UNAVAILABLE → UNAVAILABLE}, {@code UNTRUSTED → UNTRUSTED},
- *       {@code FAILED → FAILED}, {@code UNKNOWN → UNKNOWN}; direction UNKNOWN, no strength, the
- *       eligibility reasons kept verbatim. Warm-up / missing / untrusted / failed never become NEUTRAL.</li>
+ *       non-ELIGIBLE horizon is projected without reading any feature value through the shared
+ *       {@link EvidenceEligibilityProjection}: direction UNKNOWN, no strength, the eligibility
+ *       reasons kept verbatim. Warm-up / missing / untrusted / failed never become NEUTRAL.</li>
  *   <li><b>Window selection.</b> {@link TradeFlowFeature#window(MarketHorizon)} is the single canonical
  *       horizon → window mapping.</li>
  *   <li><b>Missing input → UNAVAILABLE.</b> Absent group or window ({@code FLOW_WINDOW_MISSING}); absent
@@ -82,30 +76,26 @@ import java.util.Set;
  * status ({@code BLOCKED}, {@code eligibleForTrading}) is not re-applied here — it is a fact about the
  * snapshot the opportunity layer enforces, while this evidence is a fact about one eligible window.
  *
- * <p>The snapshot and its {@link QualityAssessment} arrive as two arguments, so the evaluator
- * cross-checks that the assessment was produced from this snapshot — including the full per-horizon
- * eligibilities, re-derived through the canonical {@link HorizonEligibilityResolver} — and fails fast
- * on a mismatched pair (see {@link #requireAssessmentOfSnapshot}). The guard runs exactly once per
- * public {@code evaluate(...)} call.
+ * <p>The snapshot and its {@link QualityAssessment} arrive as two arguments, so the shared
+ * {@link SnapshotQualityConsistencyGuard} cross-checks that the assessment was produced from this
+ * snapshot — including the full per-horizon eligibilities, re-derived through the canonical
+ * resolver — and fails fast on a mismatched pair. The guard runs exactly once per public
+ * {@code evaluate(...)} call, never once per horizon.
  */
 public final class FlowAssessmentEvaluator {
 
     private static final BigDecimal MINUS_ONE = BigDecimal.ONE.negate();
 
-    /**
-     * The canonical Stage 3 eligibility rules, used by the consistency guard to re-derive the
-     * eligibilities this snapshot must produce — never a copy of those rules. Stateless, so the
-     * evaluator stays pure and thread-safe.
-     */
-    private final HorizonEligibilityResolver horizonEligibilityResolver;
+    /** Shared snapshot ↔ assessment consistency check; stateless, so the evaluator stays pure and thread-safe. */
+    private final SnapshotQualityConsistencyGuard consistencyGuard;
 
     public FlowAssessmentEvaluator() {
-        this(new HorizonEligibilityResolver());
+        this(new SnapshotQualityConsistencyGuard());
     }
 
-    /** Package-private for tests; production uses the canonical resolver. */
-    FlowAssessmentEvaluator(HorizonEligibilityResolver horizonEligibilityResolver) {
-        this.horizonEligibilityResolver = requireNonNull(horizonEligibilityResolver, "horizonEligibilityResolver");
+    /** Package-private for tests; production uses the canonical guard. */
+    FlowAssessmentEvaluator(SnapshotQualityConsistencyGuard consistencyGuard) {
+        this.consistencyGuard = requireNonNull(consistencyGuard, "consistencyGuard");
     }
 
     /**
@@ -123,7 +113,7 @@ public final class FlowAssessmentEvaluator {
                                     QualityAssessment qualityAssessment,
                                     FlowAssessmentPolicy policy) {
         validateInputs(snapshot, qualityAssessment, policy);
-        requireAssessmentOfSnapshot(snapshot, qualityAssessment);
+        consistencyGuard.verify(snapshot, qualityAssessment);
         Map<MarketHorizon, EvidenceAssessment> result = new EnumMap<>(MarketHorizon.class);
         for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
             result.put(horizon, evaluateValidated(snapshot, qualityAssessment, policy, horizon));
@@ -138,7 +128,7 @@ public final class FlowAssessmentEvaluator {
                                        MarketHorizon horizon) {
         validateInputs(snapshot, qualityAssessment, policy);
         requireNonNull(horizon, "horizon");
-        requireAssessmentOfSnapshot(snapshot, qualityAssessment);
+        consistencyGuard.verify(snapshot, qualityAssessment);
         return evaluateValidated(snapshot, qualityAssessment, policy, horizon);
     }
 
@@ -158,8 +148,7 @@ public final class FlowAssessmentEvaluator {
         // 1. Eligibility precedence: no feature value is read for a non-ELIGIBLE horizon.
         HorizonEligibility eligibility = qualityAssessment.eligibilityOf(horizon);
         if (!eligibility.isEligible()) {
-            return EvidenceAssessment.notAvailable(EvidenceDimension.FLOW,
-                    projectEligibility(eligibility), eligibility.reasonCodes());
+            return EvidenceEligibilityProjection.project(EvidenceDimension.FLOW, eligibility);
         }
         List<ReasonCode> inherited = eligibility.reasonCodes();
 
@@ -224,61 +213,6 @@ public final class FlowAssessmentEvaluator {
         }
         return EvidenceAssessment.available(EvidenceDimension.FLOW, InterpretationDirection.NEUTRAL,
                 EvidenceStrength.MIN, concat(inherited, FlowReasonCodes.FLOW_NEUTRAL_IMBALANCE));
-    }
-
-    /**
-     * Consistency guard: the {@link QualityAssessment} must have been produced from <em>this</em>
-     * snapshot. The two are separate arguments (Stage 3 returns a standalone assessment), so a caller
-     * could otherwise pair a fresh, all-ELIGIBLE assessment of snapshot A with the feature values of an
-     * UNSAFE / stale snapshot B and mint directional evidence from data the quality layer never
-     * cleared. Every source fact the assessment carries is compared against the snapshot:
-     * {@code sourceQualityStatus}, {@code futureEventDetected}, {@code timing.sourceEvaluationAt}
-     * ({@code evaluationTs}), {@code timing.sourceComputedAt} ({@code computedAt}), the failed
-     * feature groups — and the full per-horizon {@code horizonEligibilities}, re-derived from the
-     * snapshot through the canonical {@link HorizonEligibilityResolver} (never a copy of its rules).
-     * The eligibility check is what separates two same-status DEGRADED snapshots whose degradation
-     * differs (e.g. incomplete book vs stale trades): identical timestamps, status and failed groups,
-     * but ELIGIBLE vs UNTRUSTED flow horizons. This is a structural cross-check, not full lineage
-     * binding — a typed Stage 3 result carrying the snapshot (and, on the wire,
-     * {@code sourceFeatureEventId}) is the runtime assembler's job. Runs exactly once per public
-     * {@code evaluate(...)} call, before any flow feature value is read. Package-visible for tests.
-     */
-    void requireAssessmentOfSnapshot(MarketFeaturesSnapshot snapshot, QualityAssessment qualityAssessment) {
-        FeatureQuality quality = snapshot.quality();
-        FeatureQualityStatus expectedStatus = quality == null ? null : quality.status();
-        requireMatch(qualityAssessment.sourceQualityStatus() == expectedStatus,
-                "sourceQualityStatus", expectedStatus, qualityAssessment.sourceQualityStatus());
-        boolean expectedFutureEvent = quality != null && quality.futureEventDetected();
-        requireMatch(qualityAssessment.futureEventDetected() == expectedFutureEvent,
-                "futureEventDetected", expectedFutureEvent, qualityAssessment.futureEventDetected());
-        requireMatch(Objects.equals(qualityAssessment.timing().sourceEvaluationAt(), snapshot.evaluationTs()),
-                "timing.sourceEvaluationAt", snapshot.evaluationTs(), qualityAssessment.timing().sourceEvaluationAt());
-        requireMatch(Objects.equals(qualityAssessment.timing().sourceComputedAt(), snapshot.computedAt()),
-                "timing.sourceComputedAt", snapshot.computedAt(), qualityAssessment.timing().sourceComputedAt());
-        requireMatch(qualityAssessment.failedFeatureGroups().equals(FeatureGroupId.failedGroupsOf(snapshot.diagnostics())),
-                "failedFeatureGroups", FeatureGroupId.failedGroupsOf(snapshot.diagnostics()),
-                qualityAssessment.failedFeatureGroups());
-        HorizonEligibilities expectedEligibilities = horizonEligibilityResolver.resolve(snapshot);
-        requireMatch(expectedEligibilities.equals(qualityAssessment.horizonEligibilities()),
-                "horizonEligibilities", expectedEligibilities, qualityAssessment.horizonEligibilities());
-    }
-
-    private static void requireMatch(boolean matches, String fact, Object fromSnapshot, Object fromAssessment) {
-        if (!matches) {
-            throw new IllegalArgumentException("qualityAssessment was not produced from this snapshot: "
-                    + fact + " is '" + fromAssessment + "' but the snapshot says '" + fromSnapshot + "'");
-        }
-    }
-
-    /** Eligibility status → evidence availability for a non-ELIGIBLE horizon (ELIGIBLE is never projected). */
-    static EvidenceAvailabilityStatus projectEligibility(HorizonEligibility eligibility) {
-        return switch (eligibility.status()) {
-            case ELIGIBLE -> throw new IllegalArgumentException("ELIGIBLE horizons are evaluated, not projected");
-            case WARMING_UP, UNAVAILABLE -> EvidenceAvailabilityStatus.UNAVAILABLE;
-            case UNTRUSTED -> EvidenceAvailabilityStatus.UNTRUSTED;
-            case FAILED -> EvidenceAvailabilityStatus.FAILED;
-            case UNKNOWN -> EvidenceAvailabilityStatus.UNKNOWN;
-        };
     }
 
     /**

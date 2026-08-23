@@ -37,6 +37,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
 import com.trading.marketsignalengine.application.domain.interpretation.EvidenceAssessment;
 import com.trading.marketsignalengine.application.domain.interpretation.EvidenceAvailabilityStatus;
 import com.trading.marketsignalengine.application.domain.interpretation.EvidenceDimension;
+import com.trading.marketsignalengine.application.domain.interpretation.EvidenceEligibilityProjection;
 import com.trading.marketsignalengine.application.domain.interpretation.EvidenceStrength;
 import com.trading.marketsignalengine.application.domain.interpretation.HorizonEligibility;
 import com.trading.marketsignalengine.application.domain.interpretation.HorizonEligibilityStatus;
@@ -44,6 +45,7 @@ import com.trading.marketsignalengine.application.domain.interpretation.Interpre
 import com.trading.marketsignalengine.application.domain.interpretation.ReasonCode;
 import com.trading.marketsignalengine.application.domain.interpretation.quality.QualityAssessment;
 import com.trading.marketsignalengine.application.domain.interpretation.quality.QualityReasonCodes;
+import com.trading.marketsignalengine.application.domain.interpretation.quality.SnapshotQualityConsistencyGuard;
 import com.trading.marketsignalengine.application.domain.model.MarketHorizon;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureDiagnostics;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus;
@@ -54,6 +56,7 @@ import com.trading.marketsignalengine.application.domain.rule.SignalRuleTestSupp
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Stream;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
@@ -277,12 +280,31 @@ class FlowAssessmentEvaluatorTest {
 
     @Test
     void unknownEligibilityProjectsToUnknownAndEligibleIsNeverProjected() {
-        // Stage 3 never emits UNKNOWN (fail-closed vocabulary), so the mapping is pinned at unit level
+        // Stage 3 never emits UNKNOWN (fail-closed vocabulary), so the shared mapping is pinned at unit level
         assertEquals(EvidenceAvailabilityStatus.UNKNOWN,
-                FlowAssessmentEvaluator.projectEligibility(
+                EvidenceEligibilityProjection.statusOf(
                         HorizonEligibility.unknown(List.of(ReasonCode.of("SOME_UNKNOWN_STATE")))));
         assertThrows(IllegalArgumentException.class,
-                () -> FlowAssessmentEvaluator.projectEligibility(HorizonEligibility.eligible()));
+                () -> EvidenceEligibilityProjection.statusOf(HorizonEligibility.eligible()));
+    }
+
+    @Test
+    void consistencyGuardRunsExactlyOncePerPublicEvaluation() {
+        AtomicInteger verifications = new AtomicInteger();
+        FlowAssessmentEvaluator counted = new FlowAssessmentEvaluator(new SnapshotQualityConsistencyGuard() {
+            @Override
+            public void verify(MarketFeaturesSnapshot snapshot, QualityAssessment qualityAssessment) {
+                verifications.incrementAndGet();
+                super.verify(snapshot, qualityAssessment);
+            }
+        });
+        MarketFeaturesSnapshot snapshot = snapshot(uniform(active("0.00")));
+        QualityAssessment qa = quality(snapshot);
+
+        counted.evaluate(snapshot, qa, POLICY);
+        assertEquals(1, verifications.get(), "aggregate evaluation verifies once, not once per horizon");
+        counted.evaluate(snapshot, qa, POLICY, H5S);
+        assertEquals(2, verifications.get(), "per-horizon evaluation verifies once");
     }
 
     @Test
