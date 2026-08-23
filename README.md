@@ -236,11 +236,15 @@ and an explicit, versioned `FlowAssessmentPolicy` into `FlowAssessments` — exa
 `EvidenceAssessment` per `MarketHorizon` (`1S, 5S, 15S, 60S`, canonical order, fail-fast lookup,
 immutable, value equality; extra map entries rejected). Pure and deterministic (no
 Spring/Kafka/Avro/`Clock`/metrics): same input + policy ⇒ value-equal result. The evaluator
-cross-checks that the `QualityAssessment` was produced from the given snapshot (source status,
-future-event flag, `evaluationTs`/`computedAt`, failed feature groups) and fails fast on a mismatched
-pair; full lineage binding via a typed Stage 3 result / `sourceFeatureEventId` comes with the runtime
-assembler. The output is heuristic **evidence** — not a probability, not a confidence,
-not BUY/SELL, not an opportunity.
+cross-checks that the `QualityAssessment` was produced from the given snapshot — source status,
+future-event flag, `evaluationTs`/`computedAt`, failed feature groups, and the full per-horizon
+eligibilities re-derived through the canonical `HorizonEligibilityResolver` (a pure dependency; the
+eligibility rules are never duplicated) — and fails fast on a mismatched pair, which also separates
+two same-status DEGRADED snapshots whose degradation differs (incomplete book vs stale trades). The
+guard runs exactly once per `evaluate(...)` call, before any flow value is read. This is not full
+lineage binding: full identity binding via `sourceFeatureEventId` comes with the runtime assembler.
+The output is heuristic **evidence** — not a probability, not a confidence, not BUY/SELL, not an
+opportunity.
 
 - **Policy** (`FlowAssessmentPolicy`, `FlowHorizonPolicy` per horizon; `BigDecimal` only, no defaults, no
   production values yet): `policyVersion` (non-blank, not a placeholder), and per horizon

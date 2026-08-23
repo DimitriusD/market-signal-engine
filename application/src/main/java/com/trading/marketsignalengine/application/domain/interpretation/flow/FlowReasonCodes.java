@@ -16,7 +16,11 @@ public final class FlowReasonCodes {
 
     // ------------------------------------------------------------------ missing input → UNAVAILABLE
 
-    /** The trade-flow group or the horizon's window is absent. */
+    /**
+     * The trade-flow group or the horizon's window is absent. Defensive: the snapshot↔assessment
+     * guard implies an ELIGIBLE horizon always has a computed (non-null) window, so this code can only
+     * surface if evaluation is ever reached without that guarantee.
+     */
     public static final ReasonCode FLOW_WINDOW_MISSING = ReasonCode.of("FLOW_WINDOW_MISSING");
     /** The window is present but {@code signedFlowImbalance} is {@code null}. */
     public static final ReasonCode FLOW_IMBALANCE_MISSING = ReasonCode.of("FLOW_IMBALANCE_MISSING");

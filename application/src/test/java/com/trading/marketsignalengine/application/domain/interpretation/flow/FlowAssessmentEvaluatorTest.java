@@ -8,7 +8,6 @@ import static com.trading.marketsignalengine.application.domain.interpretation.f
 import static com.trading.marketsignalengine.application.domain.interpretation.flow.FlowFixtures.allEligible;
 import static com.trading.marketsignalengine.application.domain.interpretation.flow.FlowFixtures.bd;
 import static com.trading.marketsignalengine.application.domain.interpretation.flow.FlowFixtures.quality;
-import static com.trading.marketsignalengine.application.domain.interpretation.flow.FlowFixtures.qualityWith;
 import static com.trading.marketsignalengine.application.domain.interpretation.flow.FlowFixtures.snapshot;
 import static com.trading.marketsignalengine.application.domain.interpretation.flow.FlowFixtures.tradeFlow;
 import static com.trading.marketsignalengine.application.domain.interpretation.flow.FlowFixtures.uniform;
@@ -43,13 +42,13 @@ import com.trading.marketsignalengine.application.domain.interpretation.HorizonE
 import com.trading.marketsignalengine.application.domain.interpretation.HorizonEligibilityStatus;
 import com.trading.marketsignalengine.application.domain.interpretation.InterpretationDirection;
 import com.trading.marketsignalengine.application.domain.interpretation.ReasonCode;
-import com.trading.marketsignalengine.application.domain.interpretation.quality.HorizonEligibilities;
 import com.trading.marketsignalengine.application.domain.interpretation.quality.QualityAssessment;
 import com.trading.marketsignalengine.application.domain.interpretation.quality.QualityReasonCodes;
 import com.trading.marketsignalengine.application.domain.model.MarketHorizon;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureDiagnostics;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus;
 import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
+import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowFeature;
 import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowWindow;
 import com.trading.marketsignalengine.application.domain.rule.SignalRuleTestSupport;
 import java.math.BigDecimal;
@@ -71,7 +70,6 @@ import org.junit.jupiter.params.provider.MethodSource;
 class FlowAssessmentEvaluatorTest {
 
     private static final BigDecimal EPS = bd("0.000001");
-    private static final ReasonCode ELIGIBLE_NOTE = ReasonCode.of("ELIGIBLE_NOTE");
 
     private final FlowAssessmentEvaluator evaluator = new FlowAssessmentEvaluator();
 
@@ -153,6 +151,60 @@ class FlowAssessmentEvaluatorTest {
     }
 
     @Test
+    void degradedSnapshotsWithDifferentEligibilityCausesAreNotInterchangeable() {
+        // A: DEGRADED because the book is incomplete — trade-flow horizons stay ELIGIBLE.
+        MarketFeaturesSnapshot bookDegraded = SignalRuleTestSupport.tradableFeaturesBuilder()
+                .tradeFlow(uniform(active("0.90")))
+                .quality(SignalRuleTestSupport.tradableQuality().toBuilder()
+                        .status(FeatureQualityStatus.DEGRADED).incompleteBook(true)
+                        .qualityReasons(List.of("INCOMPLETE_BOOK")).build())
+                .build();
+        // B: DEGRADED because trades are stale — every trade-flow horizon is UNTRUSTED.
+        MarketFeaturesSnapshot staleFlow = SignalRuleTestSupport.tradableFeaturesBuilder()
+                .tradeFlow(uniform(active("0.90")))
+                .quality(SignalRuleTestSupport.tradableQuality().toBuilder()
+                        .status(FeatureQualityStatus.DEGRADED).staleTrades(true)
+                        .qualityReasons(List.of("STALE_TRADES")).build())
+                .build();
+        QualityAssessment assessmentA = QUALITY_RESOLVER.resolve(bookDegraded, ASSESSED_AT, QUALITY_POLICY);
+        QualityAssessment assessmentB = QUALITY_RESOLVER.resolve(staleFlow, ASSESSED_AT, QUALITY_POLICY);
+
+        // Precondition: every fact the pre-eligibility guard compares is identical between A and B...
+        assertEquals(assessmentA.sourceQualityStatus(), assessmentB.sourceQualityStatus());
+        assertEquals(assessmentA.futureEventDetected(), assessmentB.futureEventDetected());
+        assertEquals(assessmentA.timing().sourceEvaluationAt(), assessmentB.timing().sourceEvaluationAt());
+        assertEquals(assessmentA.timing().sourceComputedAt(), assessmentB.timing().sourceComputedAt());
+        assertEquals(assessmentA.failedFeatureGroups(), assessmentB.failedFeatureGroups());
+        // ...only the per-horizon eligibility separates them.
+        assertTrue(assessmentA.horizonEligibilities().allEligible());
+        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
+            assertEquals(HorizonEligibilityStatus.UNTRUSTED, assessmentB.horizonEligibilities().statusOf(horizon));
+        }
+
+        // Snapshot B (stale flow values) + assessment A (ELIGIBLE horizons) must fail fast, not go bullish.
+        IllegalArgumentException aggregate = assertThrows(IllegalArgumentException.class,
+                () -> evaluator.evaluate(staleFlow, assessmentA, POLICY));
+        assertTrue(aggregate.getMessage().contains("horizonEligibilities"), aggregate.getMessage());
+        assertTrue(aggregate.getMessage().contains("not produced from this snapshot"), aggregate.getMessage());
+        IllegalArgumentException perHorizon = assertThrows(IllegalArgumentException.class,
+                () -> evaluator.evaluate(staleFlow, assessmentA, POLICY, H5S));
+        assertTrue(perHorizon.getMessage().contains("horizonEligibilities"), perHorizon.getMessage());
+
+        // The honest pairs still evaluate: B + its own assessment projects UNTRUSTED everywhere...
+        FlowAssessments staleAssessments = evaluator.evaluate(staleFlow, assessmentB, POLICY);
+        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
+            EvidenceAssessment evidence = staleAssessments.of(horizon);
+            assertEquals(EvidenceAvailabilityStatus.UNTRUSTED, evidence.availabilityStatus(), horizon.wireValue());
+            assertEquals(InterpretationDirection.UNKNOWN, evidence.direction());
+            assertNull(evidence.evidenceStrength());
+            assertEquals(List.of(QualityReasonCodes.STALE_TRADES), evidence.reasonCodes());
+        }
+        // ...and A + its own assessment reads the same windows as bullish.
+        assertEquals(InterpretationDirection.BULLISH,
+                evaluator.evaluate(bookDegraded, assessmentA, POLICY, H5S).direction());
+    }
+
+    @Test
     void resultCollectionsAreImmutable() {
         MarketFeaturesSnapshot snapshot = snapshot(uniform(active("0.50")));
         FlowAssessments assessments = evaluator.evaluate(snapshot, quality(snapshot), POLICY);
@@ -166,34 +218,56 @@ class FlowAssessmentEvaluatorTest {
     // ------------------------------------------------------------------ eligibility precedence
 
     static Stream<Arguments> nonEligibleProjections() {
+        // corrupt, strongly directional values: a non-ELIGIBLE horizon must never interpret them
+        TradeFlowFeature corrupt = uniform(window("5.00", -10, 500, 900));
         return Stream.of(
-                Arguments.of(HorizonEligibilityStatus.WARMING_UP, EvidenceAvailabilityStatus.UNAVAILABLE,
-                        List.of(QualityReasonCodes.WINDOW_WARMING_UP)),
-                Arguments.of(HorizonEligibilityStatus.UNAVAILABLE, EvidenceAvailabilityStatus.UNAVAILABLE,
-                        List.of(QualityReasonCodes.WINDOW_NOT_COMPUTED)),
-                Arguments.of(HorizonEligibilityStatus.UNTRUSTED, EvidenceAvailabilityStatus.UNTRUSTED,
-                        List.of(QualityReasonCodes.STALE_TRADES)),
-                Arguments.of(HorizonEligibilityStatus.FAILED, EvidenceAvailabilityStatus.FAILED,
-                        List.of(QualityReasonCodes.TRADE_FLOW_CALCULATOR_FAILED)),
-                Arguments.of(HorizonEligibilityStatus.UNKNOWN, EvidenceAvailabilityStatus.UNKNOWN,
-                        List.of(ReasonCode.of("SOME_UNKNOWN_STATE"))));
+                Arguments.of("warm-up, windows not yet computed",
+                        SignalRuleTestSupport.tradableFeaturesBuilder()
+                                .tradeFlow(tradeFlow(null, null, null, null))
+                                .quality(SignalRuleTestSupport.tradableQuality().toBuilder()
+                                        .status(FeatureQualityStatus.DEGRADED).warmingUp(true)
+                                        .qualityReasons(List.of("WARMING_UP")).build())
+                                .build(),
+                        EvidenceAvailabilityStatus.UNAVAILABLE, List.of(QualityReasonCodes.WINDOW_WARMING_UP)),
+                Arguments.of("trade-flow group absent",
+                        snapshot(null),
+                        EvidenceAvailabilityStatus.UNAVAILABLE, List.of(QualityReasonCodes.TRADE_FLOW_GROUP_ABSENT)),
+                Arguments.of("windows not computed",
+                        snapshot(tradeFlow(null, null, null, null)),
+                        EvidenceAvailabilityStatus.UNAVAILABLE, List.of(QualityReasonCodes.WINDOW_NOT_COMPUTED)),
+                Arguments.of("stale trades over corrupt directional values",
+                        SignalRuleTestSupport.tradableFeaturesBuilder()
+                                .tradeFlow(corrupt)
+                                .quality(SignalRuleTestSupport.tradableQuality().toBuilder()
+                                        .status(FeatureQualityStatus.DEGRADED).staleTrades(true)
+                                        .qualityReasons(List.of("STALE_TRADES")).build())
+                                .build(),
+                        EvidenceAvailabilityStatus.UNTRUSTED, List.of(QualityReasonCodes.STALE_TRADES)),
+                Arguments.of("failed trade-flow calculator over corrupt directional values",
+                        SignalRuleTestSupport.tradableFeaturesBuilder()
+                                .tradeFlow(corrupt)
+                                .quality(SignalRuleTestSupport.tradableQuality().toBuilder()
+                                        .status(FeatureQualityStatus.DEGRADED)
+                                        .qualityReasons(List.of("CALCULATOR_FAILURE")).build())
+                                .diagnostics(FeatureDiagnostics.builder()
+                                        .failedFeatureGroups(List.of("trade-flow")).totalFeatureGroups(4).build())
+                                .build(),
+                        EvidenceAvailabilityStatus.FAILED, List.of(QualityReasonCodes.TRADE_FLOW_CALCULATOR_FAILED)));
     }
 
-    @ParameterizedTest
+    @ParameterizedTest(name = "{0}")
     @MethodSource("nonEligibleProjections")
-    void nonEligibleHorizonIsProjectedWithoutReadingFeatureValues(HorizonEligibilityStatus status,
+    void nonEligibleHorizonIsProjectedWithoutReadingFeatureValues(String label,
+                                                                  MarketFeaturesSnapshot snapshot,
                                                                   EvidenceAvailabilityStatus expected,
                                                                   List<ReasonCode> reasons) {
-        // every horizon carries corrupt, strongly directional values: they must never be interpreted
-        TradeFlowWindow corrupt = window("5.00", -10, 500, 900);
-        MarketFeaturesSnapshot snapshot = snapshot(uniform(corrupt));
-        QualityAssessment qa = qualityWith(HorizonEligibilities.uniform(new HorizonEligibility(status, reasons)));
+        QualityAssessment qa = QUALITY_RESOLVER.resolve(snapshot, ASSESSED_AT, QUALITY_POLICY);
 
         FlowAssessments assessments = evaluator.evaluate(snapshot, qa, POLICY);
 
         for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
             EvidenceAssessment evidence = assessments.of(horizon);
-            assertEquals(expected, evidence.availabilityStatus(), horizon.wireValue());
+            assertEquals(expected, evidence.availabilityStatus(), label + ": " + horizon.wireValue());
             assertEquals(InterpretationDirection.UNKNOWN, evidence.direction(), horizon.wireValue());
             assertNull(evidence.evidenceStrength(), horizon.wireValue());
             assertEquals(reasons, evidence.reasonCodes(), "eligibility reasons are kept verbatim: " + horizon);
@@ -202,51 +276,53 @@ class FlowAssessmentEvaluatorTest {
     }
 
     @Test
-    void eligibilityIsDecidedPerHorizonIndependently() {
-        MarketFeaturesSnapshot snapshot = snapshot(uniform(active("0.50")));
-        QualityAssessment qa = qualityWith(HorizonEligibilities.of(
-                HorizonEligibility.eligible(),
-                HorizonEligibility.warmingUp(List.of(QualityReasonCodes.WINDOW_WARMING_UP)),
-                HorizonEligibility.eligible(),
-                HorizonEligibility.failed(List.of(QualityReasonCodes.TRADE_FLOW_CALCULATOR_FAILED))));
-
-        FlowAssessments assessments = evaluator.evaluate(snapshot, qa, POLICY);
-
-        assertEquals(InterpretationDirection.NEUTRAL, assessments.of(H1S).direction(), "0.50 < 1S bullish 0.60");
-        assertEquals(EvidenceAvailabilityStatus.UNAVAILABLE, assessments.of(H5S).availabilityStatus());
-        assertEquals(InterpretationDirection.BULLISH, assessments.of(H15S).direction(), "0.50 >= 15S bullish 0.20");
-        assertEquals(EvidenceAvailabilityStatus.FAILED, assessments.of(H60S).availabilityStatus());
+    void unknownEligibilityProjectsToUnknownAndEligibleIsNeverProjected() {
+        // Stage 3 never emits UNKNOWN (fail-closed vocabulary), so the mapping is pinned at unit level
+        assertEquals(EvidenceAvailabilityStatus.UNKNOWN,
+                FlowAssessmentEvaluator.projectEligibility(
+                        HorizonEligibility.unknown(List.of(ReasonCode.of("SOME_UNKNOWN_STATE")))));
+        assertThrows(IllegalArgumentException.class,
+                () -> FlowAssessmentEvaluator.projectEligibility(HorizonEligibility.eligible()));
     }
 
     @Test
-    void eligibleHorizonReasonsArePreservedAheadOfFlowReasons() {
-        MarketFeaturesSnapshot snapshot = snapshot(uniform(active("0.50")));
-        QualityAssessment qa = qualityWith(HorizonEligibilities.uniform(HorizonEligibility.eligible(List.of(ELIGIBLE_NOTE))));
+    void eligibilityIsDecidedPerHorizonIndependently() {
+        // history gap: short windows computed and ELIGIBLE, uncovered long windows UNTRUSTED — one snapshot
+        MarketFeaturesSnapshot gap = SignalRuleTestSupport.tradableFeaturesBuilder()
+                .tradeFlow(tradeFlow(active("0.50"), active("0.50"), null, null))
+                .quality(SignalRuleTestSupport.tradableQuality().toBuilder()
+                        .status(FeatureQualityStatus.DEGRADED)
+                        .qualityReasons(List.of("TRADE_HISTORY_GAP")).build())
+                .build();
+        QualityAssessment qa = QUALITY_RESOLVER.resolve(gap, ASSESSED_AT, QUALITY_POLICY);
 
-        EvidenceAssessment evidence = evaluator.evaluate(snapshot, qa, POLICY, H5S);
+        FlowAssessments assessments = evaluator.evaluate(gap, qa, POLICY);
 
-        assertEquals(InterpretationDirection.BULLISH, evidence.direction());
-        assertEquals(List.of(ELIGIBLE_NOTE, FLOW_BULLISH_IMBALANCE), evidence.reasonCodes());
+        assertEquals(InterpretationDirection.NEUTRAL, assessments.of(H1S).direction(), "0.50 < 1S bullish 0.60");
+        assertEquals(InterpretationDirection.BULLISH, assessments.of(H5S).direction(), "0.50 >= 5S bullish 0.30");
+        for (MarketHorizon horizon : List.of(H15S, H60S)) {
+            EvidenceAssessment evidence = assessments.of(horizon);
+            assertEquals(EvidenceAvailabilityStatus.UNTRUSTED, evidence.availabilityStatus(), horizon.wireValue());
+            assertEquals(List.of(QualityReasonCodes.TRADE_HISTORY_GAP), evidence.reasonCodes());
+        }
     }
 
     // ------------------------------------------------------------------ missing input
 
     @Test
-    void absentTradeFlowGroupOrWindowIsUnavailableNotZero() {
-        // defensive path: a hand-built all-ELIGIBLE assessment over a snapshot without the window
-        MarketFeaturesSnapshot noGroup = snapshot(null);
+    void absentWindowIsProjectedPerHorizonWhileComputedOnesEvaluate() {
         MarketFeaturesSnapshot noWindow15s = snapshot(tradeFlow(active("0.50"), active("0.50"), null, active("0.50")));
+        QualityAssessment qa = quality(noWindow15s);
 
-        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
-            EvidenceAssessment evidence = evaluator.evaluate(noGroup, allEligible(), POLICY, horizon);
-            assertEquals(EvidenceAvailabilityStatus.UNAVAILABLE, evidence.availabilityStatus(), horizon.wireValue());
-            assertEquals(InterpretationDirection.UNKNOWN, evidence.direction());
-            assertNull(evidence.evidenceStrength());
-            assertEquals(List.of(FLOW_WINDOW_MISSING), evidence.reasonCodes());
-        }
-        EvidenceAssessment missing15s = evaluator.evaluate(noWindow15s, allEligible(), POLICY, H15S);
-        assertEquals(List.of(FLOW_WINDOW_MISSING), missing15s.reasonCodes());
-        assertEquals(InterpretationDirection.BULLISH, evaluator.evaluate(noWindow15s, allEligible(), POLICY, H5S).direction());
+        FlowAssessments assessments = evaluator.evaluate(noWindow15s, qa, POLICY);
+
+        EvidenceAssessment missing15s = assessments.of(H15S);
+        assertEquals(EvidenceAvailabilityStatus.UNAVAILABLE, missing15s.availabilityStatus());
+        assertEquals(InterpretationDirection.UNKNOWN, missing15s.direction(), "an absent window is not zero");
+        assertNull(missing15s.evidenceStrength());
+        assertEquals(List.of(QualityReasonCodes.WINDOW_NOT_COMPUTED), missing15s.reasonCodes());
+        assertEquals(InterpretationDirection.BULLISH, assessments.of(H5S).direction());
+        assertEquals(InterpretationDirection.BULLISH, assessments.of(H60S).direction(), "0.50 >= 60S bullish 0.15");
     }
 
     @Test

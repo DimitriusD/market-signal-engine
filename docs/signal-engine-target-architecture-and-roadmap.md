@@ -1500,22 +1500,32 @@ MarketFeaturesSnapshot + QualityAssessment (Етап 3) + FlowAssessmentPolicy
 11. **Consistency guard.** Snapshot і `QualityAssessment` приходять окремими аргументами, тому
     evaluator перевіряє, що assessment створений саме з цього snapshot: `sourceQualityStatus`,
     `futureEventDetected`, `timing.sourceEvaluationAt`/`sourceComputedAt` ↔
-    `evaluationTs`/`computedAt`, `failedFeatureGroups`; mismatched пара (напр., all-ELIGIBLE
-    assessment snapshot A + UNSAFE/stale flow values snapshot B) → fail-fast, а не bullish evidence.
-    Це structural cross-check; повна lineage-прив'язка (typed Stage 3 result, `sourceFeatureEventId`)
-    — етап runtime assembler.
+    `evaluationTs`/`computedAt`, `failedFeatureGroups` — і повні per-horizon
+    `horizonEligibilities`, повторно виведені зі snapshot через канонічний
+    `HorizonEligibilityResolver` (pure dependency evaluator-а; правила eligibility не дублюються).
+    Саме eligibility-перевірка розрізняє два DEGRADED snapshots з ідентичними timestamps / status /
+    failed groups, але різними причинами degradation (incomplete book → ELIGIBLE flow horizons vs
+    stale trades → UNTRUSTED): mismatched пара (напр., ELIGIBLE assessment snapshot A + stale flow
+    values snapshot B) → fail-fast, а не bullish evidence. Guard виконується рівно один раз на
+    public `evaluate(...)` виклик (aggregate: 1 guard + чотири `evaluateValidated`), до читання
+    будь-яких flow feature values. Це structural cross-check, не повне lineage binding; повна
+    identity-прив'язка через `sourceFeatureEventId` буде реалізована у runtime assembler.
+    Наслідок: `FLOW_WINDOW_MISSING` став суто defensive — ELIGIBLE horizon за визначенням має
+    computed window, тому end-to-end цей код більше недосяжний.
 
-Тести: +106 (505 загалом, 0 failures): `FlowHorizonPolicyTest` (17), `FlowAssessmentPolicyTest` (16),
-`FlowAssessmentsTest` (6), `FlowReasonCodesTest` (2), `FlowAssessmentEvaluatorTest` (63: eligibility
-projection для кожного non-ELIGIBLE status; non-eligible horizon не читає навіть corrupt values; null
+Тести: +107 (506 загалом, 0 failures): `FlowHorizonPolicyTest` (17), `FlowAssessmentPolicyTest` (16),
+`FlowAssessmentsTest` (6), `FlowReasonCodesTest` (2), `FlowAssessmentEvaluatorTest` (64: eligibility
+projection для реальних Stage 3 сценаріїв (warm-up, group absent, window not computed, stale trades,
+failed calculator; UNKNOWN mapping закріплений unit-тестом — Stage 3 його не емить); non-eligible
+horizon не читає навіть corrupt values; null
 ≠ zero/neutral; zero imbalance → NEUTRAL/0; low activity → UNKNOWN, не NEUTRAL; bullish/bearish
 `−ε / exact / +ε` для всіх чотирьох горизонтів; exact `maxUnknownSideRatio` проходить, вище —
 UNTRUSTED; negative counts, count contradictions, out-of-range imbalance → UNTRUSTED; strength =
 |imbalance|; determinism; різні verdicts на різних горизонтах за однакового flow; інтеграція з реальним
-Stage 3 resolver: partial warm-up, stale trades, failed `trade-flow`, NO_DATA; mismatched
-snapshot/assessment пара rejected), `TradeFlowFeatureTest`
-(2). Stage 1 availability, Stage 2 invariants і Stage 3 quality tests без змін; golden files
-byte-for-byte unchanged.
+Stage 3 resolver: partial warm-up, history gap, stale trades, failed `trade-flow`, NO_DATA; mismatched
+snapshot/assessment пара rejected, включно з DEGRADED↔DEGRADED regression, де лише per-horizon
+eligibility розрізняє snapshots), `TradeFlowFeatureTest` (2). Stage 1 availability, Stage 2
+invariants і Stage 3 quality tests без змін; golden files byte-for-byte unchanged.
 
 **Runtime isolation:** V1 `StandardSignalEngine` — єдиний runtime engine; V1 Kafka input/output,
 `SignalConfiguration`, metrics, golden outputs не змінені; flow evaluator — pure domain layer без
