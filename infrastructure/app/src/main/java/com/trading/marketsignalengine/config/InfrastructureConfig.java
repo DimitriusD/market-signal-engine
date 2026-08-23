@@ -8,6 +8,7 @@ import com.trading.marketsignalengine.application.port.input.MarketFeaturesHandl
 import com.trading.marketsignalengine.application.port.output.MarketSignalSnapshotPublisherPort;
 import com.trading.marketsignalengine.application.port.output.SignalMetricsPort;
 import com.trading.marketsignalengine.application.service.MarketSignalHandleService;
+import com.trading.marketsignalengine.application.service.ValidatedMarketSignalEvaluator;
 import org.springframework.boot.context.properties.EnableConfigurationProperties;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
@@ -63,13 +64,25 @@ public class InfrastructureConfig {
         return new MarketFeaturesSnapshotValidator(supported);
     }
 
+    /**
+     * The one validated evaluation step (validate → evaluate) shared by the live handler below and
+     * by {@code ReplayHarness}: live and replay cannot diverge on validation or rule wiring.
+     */
+    @Bean
+    public ValidatedMarketSignalEvaluator marketSignalEvaluator(
+            MarketFeaturesSnapshotValidator validator,
+            MarketSignalEngine marketSignalEngine) {
+        return new ValidatedMarketSignalEvaluator(validator, marketSignalEngine);
+    }
+
+    /** Live handle path: evaluatedAt = Instant.now(clock) → validated evaluator → publisher. */
     @Bean
     public MarketFeaturesHandler marketFeatureHandler(
-            MarketSignalEngine marketSignalEngine,
+            ValidatedMarketSignalEvaluator marketSignalEvaluator,
             MarketSignalSnapshotPublisherPort publisher,
-            MarketFeaturesSnapshotValidator validator,
+            Clock clock,
             SignalMetricsPort metrics) {
-        return new MarketSignalHandleService(marketSignalEngine, publisher, validator, metrics);
+        return new MarketSignalHandleService(marketSignalEvaluator, publisher, clock, metrics);
     }
 
     private static String defaultString(String value, String fallback) {

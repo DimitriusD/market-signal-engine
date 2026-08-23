@@ -15,12 +15,18 @@ spring:
       auto-offset-reset: ${APP_KAFKA_CONSUMER_AUTO_OFFSET_RESET:latest}
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      # acks=all and enable.idempotence=true are also forced in code (KafkaConfiguration) so no
+      # profile can weaken output durability.
       acks: ${APP_KAFKA_PRODUCER_ACKS:all}
       properties:
-        # Bounds the time a single send can spend inside the producer; the publisher additionally
-        # bounds the wait on the consumer thread (app.kafka.publish-timeout-ms).
-        delivery.timeout.ms: ${APP_KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS:10000}
-        request.timeout.ms: ${APP_KAFKA_PRODUCER_REQUEST_TIMEOUT_MS:5000}
+        enable.idempotence: true
+        # Timeout hierarchy, validated at startup (PublishTimeoutHierarchy):
+        #   request.timeout.ms (3000) < delivery.timeout.ms (5000) < app.kafka.publish-timeout-ms (6500)
+        # The producer must give up before the application stops waiting; otherwise a record could
+        # still be delivered after the listener started retrying the input (silent duplicate).
+        # Kafka requires delivery.timeout.ms >= linger.ms + request.timeout.ms.
+        request.timeout.ms: ${APP_KAFKA_PRODUCER_REQUEST_TIMEOUT_MS:3000}
+        delivery.timeout.ms: ${APP_KAFKA_PRODUCER_DELIVERY_TIMEOUT_MS:5000}
     # Applied through Boot's ConcurrentKafkaListenerContainerFactoryConfigurer (see KafkaConfiguration).
     listener:
       concurrency: ${APP_KAFKA_LISTENER_CONCURRENCY:1}
@@ -35,11 +41,14 @@ app:
     topic:
       market-features: ${APP_KAFKA_TOPIC_MARKET_FEATURES:market.feature.snapshot.v1}
       market-signals: ${APP_KAFKA_TOPIC_MARKET_SIGNALS:state.market.signals.v1}
-    # Max time the consumer thread waits for the output broker ack before the send is cancelled and
-    # the input record goes through retry -> DLT. Never unbounded.
-    publish-timeout-ms: ${APP_KAFKA_PUBLISH_TIMEOUT_MS:5000}
+    # Max time the consumer thread waits for the output broker ack. Must be > delivery.timeout.ms
+    # (validated at startup). On timeout the wait is abandoned (the producer may still deliver — at
+    # least once, dedup downstream on signalSnapshotId) and the input goes through retry -> DLT.
+    publish-timeout-ms: ${APP_KAFKA_PUBLISH_TIMEOUT_MS:6500}
     retry:
       backoff-ms: ${APP_KAFKA_RETRY_BACKOFF_MS:1000}
+      # FixedBackOff semantics: retries AFTER the first delivery, i.e. max-attempts=3 means up to
+      # 4 deliveries (4 publisher attempts) before the input record is dead-lettered.
       max-attempts: ${APP_KAFKA_RETRY_MAX_ATTEMPTS:3}
 
   signal:

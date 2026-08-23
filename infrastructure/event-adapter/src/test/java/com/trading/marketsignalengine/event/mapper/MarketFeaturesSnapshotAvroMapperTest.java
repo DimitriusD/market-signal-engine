@@ -42,13 +42,15 @@ class MarketFeaturesSnapshotAvroMapperTest {
     void mapsSnapshotLevelFieldsAndMetadata() {
         MarketFeaturesSnapshotEvent event = fullEvent()
                 .setEvaluationTs(1700000002500L)
-                .setTriggerSource("MARKET_EVENT")
+                .setTriggerSource("TRADE")
                 .setConfigHash("cfg-abc123")
                 .build();
 
         MarketFeaturesSnapshot s = MarketFeaturesSnapshotAvroMapper.toDomain(event);
 
         assertEquals("feat-1", s.snapshotId());
+        // metadata.schemaVersion is carried verbatim for the compatibility validator (MFS v2 → 1)
+        assertEquals(Integer.valueOf(1), s.schemaVersion());
         assertEquals("binance", s.exchange());
         assertEquals("spot", s.marketType());
         assertEquals("BTC", s.base());
@@ -60,7 +62,7 @@ class MarketFeaturesSnapshotAvroMapperTest {
         assertEquals(Instant.ofEpochMilli(1700000002000L), s.computedAt());
         assertEquals(Instant.ofEpochMilli(1700000002500L), s.evaluationTs());
         assertEquals("mfs-core-v2", s.featureSetVersion());
-        assertEquals("MARKET_EVENT", s.triggerSource());
+        assertEquals("TRADE", s.triggerSource());
         assertEquals("cfg-abc123", s.configHash());
     }
 

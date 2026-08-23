@@ -35,7 +35,7 @@ import org.springframework.kafka.support.SendResult;
 class MarketSignalSnapshotPublisherTest {
 
     @Test
-    void neverCompletingSendFailsWithinTimeoutAndCancelsTheFuture() {
+    void neverCompletingSendFailsWithinTimeoutAndAbandonsTheWait() {
         CompletableFuture<SendResult<String, MarketSignalSnapshotEvent>> pending = new CompletableFuture<>();
         MarketSignalSnapshotPublisher publisher = new MarketSignalSnapshotPublisher(
                 templateReturning(pending), "state.market.signals.v1", Duration.ofMillis(200));
@@ -47,7 +47,8 @@ class MarketSignalSnapshotPublisherTest {
         assertInstanceOf(TimeoutException.class, ex.getCause());
         assertTrue(ex.getMessage().contains("timed out after 200 ms"), ex.getMessage());
         assertTrue(elapsedMs < 5_000, "publish must not block beyond the timeout, took " + elapsedMs + " ms");
-        assertTrue(pending.isCancelled(), "pending send must be cancelled on timeout");
+        // cancel() only detaches the waiter — it does not guarantee the producer drops the record
+        assertTrue(pending.isCancelled(), "the wait must be abandoned on timeout");
     }
 
     @Test
@@ -87,6 +88,59 @@ class MarketSignalSnapshotPublisherTest {
     void nonPositiveTimeoutIsRejected() {
         assertThrows(IllegalArgumentException.class, () -> new MarketSignalSnapshotPublisher(
                 new StubTemplate(), "t", Duration.ZERO));
+        assertThrows(IllegalArgumentException.class, () -> new MarketSignalSnapshotPublisher(
+                new StubTemplate(), "t", Duration.ofMillis(-1)));
+        assertThrows(IllegalArgumentException.class, () -> new MarketSignalSnapshotPublisher(
+                new StubTemplate(), "t", null));
+    }
+
+    @Test
+    void blankTopicIsRejectedAtConstruction() {
+        assertThrows(IllegalArgumentException.class, () -> new MarketSignalSnapshotPublisher(
+                new StubTemplate(), " ", Duration.ofSeconds(1)));
+        assertThrows(IllegalArgumentException.class, () -> new MarketSignalSnapshotPublisher(
+                new StubTemplate(), null, Duration.ofSeconds(1)));
+    }
+
+    @Test
+    void nullSnapshotIsAnExplicitFailureNotASilentSkip() {
+        boolean[] sendCalled = new boolean[1];
+        MarketSignalSnapshotPublisher publisher = new MarketSignalSnapshotPublisher(new StubTemplate() {
+            @Override
+            public CompletableFuture<SendResult<String, MarketSignalSnapshotEvent>> send(
+                    String topic, String key, MarketSignalSnapshotEvent data) {
+                sendCalled[0] = true;
+                return new CompletableFuture<>();
+            }
+        }, "state.market.signals.v1", Duration.ofSeconds(1));
+
+        assertThrows(IllegalArgumentException.class, () -> publisher.publish(null));
+        assertTrue(!sendCalled[0], "nothing must be sent for a null snapshot");
+    }
+
+    @Test
+    void interruptedWaitPreservesTheInterruptFlag() throws InterruptedException {
+        CompletableFuture<SendResult<String, MarketSignalSnapshotEvent>> pending = new CompletableFuture<>();
+        MarketSignalSnapshotPublisher publisher = new MarketSignalSnapshotPublisher(
+                templateReturning(pending), "state.market.signals.v1", Duration.ofSeconds(10));
+        Throwable[] thrown = new Throwable[1];
+        boolean[] interruptedAfter = new boolean[1];
+        Thread worker = new Thread(() -> {
+            try {
+                publisher.publish(snapshot());
+            } catch (Throwable t) {
+                thrown[0] = t;
+            }
+            interruptedAfter[0] = Thread.currentThread().isInterrupted();
+        });
+        worker.start();
+        Thread.sleep(200);
+        worker.interrupt();
+        worker.join(5_000);
+
+        assertInstanceOf(SignalPublishException.class, thrown[0]);
+        assertInstanceOf(InterruptedException.class, thrown[0].getCause());
+        assertTrue(interruptedAfter[0], "interrupt flag must be restored for the caller");
     }
 
     private static KafkaTemplate<String, MarketSignalSnapshotEvent> templateReturning(

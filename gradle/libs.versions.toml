@@ -27,7 +27,7 @@ springBootStarterTest = { module = "org.springframework.boot:spring-boot-starter
 springKafkaTest = { module = "org.springframework.kafka:spring-kafka-test" }
 micrometerCore = { module = "io.micrometer:micrometer-core" }
 
-schemas = { module = "com.trading:trading-schemas", version = "1.0.0-SNAPSHOT" }
+schemas = { module = "com.trading:trading-schemas", version = "1.1.0" }
 common = { module = "com.trading:trading-common", version = "1.0.0-SNAPSHOT" }
 kafkaAvroSerializer = { module = "io.confluent:kafka-avro-serializer", version.ref = "confluent" }
 

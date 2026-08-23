@@ -63,6 +63,12 @@ public class KafkaConfiguration {
         props.put(ProducerConfig.KEY_SERIALIZER_CLASS_CONFIG, StringSerializer.class);
         props.put(ProducerConfig.VALUE_SERIALIZER_CLASS_CONFIG, KafkaAvroSerializer.class);
         props.put(AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, schemaRegistryUrl);
+        // Explicit durability: idempotent producer (no duplicates from producer-internal retries,
+        // exactly-once ordering per partition) and acks=all. Set in code so no profile can silently
+        // weaken them; app-level duplicates after an ambiguous publish timeout remain possible
+        // (at-least-once) and are deduplicated downstream on the deterministic signalSnapshotId.
+        props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
+        props.put(ProducerConfig.ACKS_CONFIG, "all");
         return props;
     }
 
@@ -78,6 +84,15 @@ public class KafkaConfiguration {
         return new KafkaTemplate<>(dltProducerFactory);
     }
 
+    /**
+     * Listener error handling. {@code FixedBackOff(backoffMs, maxAttempts)}: {@code maxAttempts} is the
+     * number of <em>retries after the first delivery</em>, so a record is delivered
+     * {@code maxAttempts + 1} times in total before it is dead-lettered ({@code app.kafka.retry.max-attempts=3}
+     * → 4 publisher attempts). {@link SignalPublishException} (bounded publish failure/timeout) is
+     * retryable; {@link AvroMappingException} and {@link InvalidMarketFeaturesSnapshotException} are
+     * contract errors and go straight to {@code <topic>.DLT} without retry. Because the input offset is
+     * only committed after a successful publish, the flow is at-least-once end to end.
+     */
     @Bean
     public CommonErrorHandler kafkaErrorHandler(
             KafkaTemplate<String, Object> dltKafkaTemplate,

@@ -279,7 +279,7 @@ signal snapshot → feature snapshot → config версій.
 1. ~~Закрити питання 8.1–8.6~~ — зроблено 2026-08-08.
 2. ~~Оновити roadmap §15 посиланням на цей план~~ — зроблено.
 3. ~~Блок 0~~ — змержено 2026-08-22.
-4. Виконати Блоки **~~2~~ (змержено PR #2) → ~~3~~ (3.2 у 2.4) → ~~4~~ (реалізовано 2026-08-22 на `block-4-hardening`, PR очікує) → 0.6 smoke → 5** послідовно;
+4. Виконати Блоки **~~2~~ (змержено PR #2) → ~~3~~ (3.2 у 2.4) → ~~4~~ (змержено PR #3) → Етап 1 стабілізації V1 (реалізовано 2026-08-23: shared validated evaluator live/replay, MFS v2 contract validator, availability normalization, Kafka timeout hierarchy + idempotence, fail-fast publisher; див. roadmap §15 «Етап 1») → 0.6 smoke → 5** послідовно;
    кожен блок — окрема гілка/PR зі своїм DoD. До запуску paper — перевірити, що
    `market.feature.snapshot.v1` записується в даталейк (§5 п.1).
 5. Після paper: Блок 1b (верифікація даталейку, loader, перша калібрація volatility-порога)

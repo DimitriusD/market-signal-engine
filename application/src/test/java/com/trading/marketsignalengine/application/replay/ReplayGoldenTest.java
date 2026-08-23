@@ -2,17 +2,24 @@ package com.trading.marketsignalengine.application.replay;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.junit.jupiter.api.Assertions.fail;
 
 import com.trading.marketsignalengine.application.domain.model.MarketSignalSnapshot;
 import com.trading.marketsignalengine.application.domain.model.SignalConfiguration;
 import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
+import com.trading.marketsignalengine.application.domain.service.MarketSignalEngine;
+import com.trading.marketsignalengine.application.domain.service.StandardSignalEngine;
+import com.trading.marketsignalengine.application.domain.validation.InvalidMarketFeaturesSnapshotException;
+import com.trading.marketsignalengine.application.domain.validation.MarketFeaturesSnapshotValidator;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Clock;
 import java.time.Instant;
+import java.time.ZoneOffset;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -25,9 +32,16 @@ import org.junit.jupiter.api.TestFactory;
 
 /**
  * Golden replay suite: every fixture in {@link GoldenFixtures} is replayed through the canonical
- * production engine ({@code ReplayHarness.standard}) with a fixed evaluation instant, rendered with
- * {@link SnapshotCanonicalText} and compared byte-for-byte with
- * {@code src/test/resources/golden/<case>.txt}.
+ * production wiring with a fixed evaluation instant, rendered with {@link SnapshotCanonicalText} and
+ * compared byte-for-byte with {@code src/test/resources/golden/<case>.txt}.
+ *
+ * <p>Replay goes through the <b>validated</b> evaluator ({@code ReplayHarness.standard}) — the same
+ * validate → evaluate step the live Kafka path runs — so a contract-invalid snapshot is rejected in
+ * replay exactly as it is live. Two fixtures ({@link GoldenFixtures#CONTRACT_REJECTED}: missing
+ * quality, missing quality status) are contract-invalid on purpose: they pin the engine's own
+ * defence-in-depth on such input. For them the suite asserts (a) the validated replay rejects them
+ * with {@link InvalidMarketFeaturesSnapshotException} and (b) the engine-layer golden still holds when
+ * the engine is called directly. Their golden files are therefore unchanged.
  *
  * <p>A failing golden means the engine's observable output changed. That is sometimes intended
  * (threshold change, new signal, new attribute) — then regenerate with the environment variable
@@ -42,7 +56,15 @@ class ReplayGoldenTest {
 
     private static final Path GOLDEN_DIR = Path.of("src", "test", "resources", "golden");
 
-    private final ReplayHarness harness = ReplayHarness.standard(SignalConfiguration.defaults());
+    /** Allowlist used for the goldens: the live default plus the historical fixture version. */
+    static final MarketFeaturesSnapshotValidator GOLDEN_VALIDATOR =
+            new MarketFeaturesSnapshotValidator(Set.of("mfs-features-v2", GoldenFixtures.FEATURE_SET_VERSION));
+
+    private final ReplayHarness harness = ReplayHarness.standard(SignalConfiguration.defaults(), GOLDEN_VALIDATOR);
+
+    /** Engine-only access for the contract-rejected fixtures (defence-in-depth goldens). */
+    private final MarketSignalEngine engine = StandardSignalEngine.create(
+            SignalConfiguration.defaults(), Clock.fixed(Instant.EPOCH, ZoneOffset.UTC));
 
     @TestFactory
     Stream<DynamicTest> goldenCases() {
@@ -70,11 +92,21 @@ class ReplayGoldenTest {
     }
 
     @Test
+    void contractRejectedFixturesAreRejectedByValidatedReplayNotEvaluated() {
+        for (String name : GoldenFixtures.CONTRACT_REJECTED) {
+            MarketFeaturesSnapshot input = GoldenFixtures.all().get(name);
+            assertThrows(InvalidMarketFeaturesSnapshotException.class,
+                    () -> harness.replay(List.of(input), ReplayHarness.fixed(EVALUATED_AT)),
+                    "validated replay must reject contract-invalid fixture " + name);
+        }
+    }
+
+    @Test
     void replayIsDeterministicAcrossRuns() {
-        List<MarketFeaturesSnapshot> inputs = new ArrayList<>(GoldenFixtures.all().values());
+        List<MarketFeaturesSnapshot> inputs = replayableInputs();
 
         List<MarketSignalSnapshot> first = harness.replay(inputs, ReplayHarness.fixed(EVALUATED_AT));
-        List<MarketSignalSnapshot> second = ReplayHarness.standard(SignalConfiguration.defaults())
+        List<MarketSignalSnapshot> second = ReplayHarness.standard(SignalConfiguration.defaults(), GOLDEN_VALIDATOR)
                 .replay(inputs, ReplayHarness.fixed(EVALUATED_AT));
 
         assertEquals(inputs.size(), first.size());
@@ -94,7 +126,7 @@ class ReplayGoldenTest {
 
     @Test
     void replayPreservesOrderAndOneToOneMapping() {
-        List<MarketFeaturesSnapshot> inputs = new ArrayList<>(GoldenFixtures.all().values());
+        List<MarketFeaturesSnapshot> inputs = replayableInputs();
 
         List<MarketSignalSnapshot> outputs = harness.replay(inputs, ReplayHarness.fixed(EVALUATED_AT));
 
@@ -115,8 +147,36 @@ class ReplayGoldenTest {
         assertFalse(output.validUntil().isBefore(GoldenFixtures.COMPUTED_AT));
     }
 
+    @Test
+    void replayableFixturesPassTheLiveDefaultValidatorExceptForTheirHistoricalVersion() {
+        // Every replayable fixture is a complete MFS v2 input: the only reason the live default
+        // allowlist would reject it is the historical featureSetVersion kept for golden stability.
+        MarketFeaturesSnapshotValidator liveDefault = new MarketFeaturesSnapshotValidator(
+                ReplayHarness.DEFAULT_SUPPORTED_FEATURE_SET_VERSIONS);
+        for (MarketFeaturesSnapshot input : replayableInputs()) {
+            liveDefault.validate(input.toBuilder().featureSetVersion("mfs-features-v2").build());
+        }
+    }
+
+    private static List<MarketFeaturesSnapshot> replayableInputs() {
+        List<MarketFeaturesSnapshot> inputs = new ArrayList<>();
+        for (Map.Entry<String, MarketFeaturesSnapshot> e : GoldenFixtures.all().entrySet()) {
+            if (!GoldenFixtures.CONTRACT_REJECTED.contains(e.getKey())) {
+                inputs.add(e.getValue());
+            }
+        }
+        return inputs;
+    }
+
     private void assertGolden(String name, MarketFeaturesSnapshot input) throws IOException {
-        MarketSignalSnapshot output = harness.replay(List.of(input), ReplayHarness.fixed(EVALUATED_AT)).get(0);
+        MarketSignalSnapshot output;
+        if (GoldenFixtures.CONTRACT_REJECTED.contains(name)) {
+            // Contract-invalid by design: validated replay rejects it (asserted separately); the
+            // golden pins the engine's defence-in-depth should such input ever reach it.
+            output = engine.evaluate(input, EVALUATED_AT);
+        } else {
+            output = harness.replay(List.of(input), ReplayHarness.fixed(EVALUATED_AT)).get(0);
+        }
         String actual = SnapshotCanonicalText.render(output);
         Path file = GOLDEN_DIR.resolve(name + ".txt");
 

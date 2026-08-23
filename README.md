@@ -35,7 +35,7 @@ market-signal-engine
 Runtime flow:
 
 ```
-state.market.features.v1
+market.feature.snapshot.v1
     ↓
 MarketFeaturesKafkaConsumer
     ↓
@@ -43,9 +43,11 @@ MarketFeaturesSnapshotAvroMapper
     ↓
 domain MarketFeaturesSnapshot
     ↓
-MarketFeaturesHandler
+MarketFeaturesHandler (MarketSignalHandleService, evaluatedAt = now(clock))
     ↓
-DefaultMarketSignalEngine
+ValidatedMarketSignalEvaluator  ←  shared with ReplayHarness
+    ├─ MarketFeaturesSnapshotValidator (MFS v2 contract → DLT on contradiction)
+    └─ DefaultMarketSignalEngine (StandardSignalEngine wiring)
     ↓
 domain MarketSignalSnapshot
     ↓
@@ -96,46 +98,109 @@ docker compose up -d
 | `APP_SIGNAL_RISK_OFF_TTL_MS` | `5000` | TTL of a risk-off snapshot |
 | `APP_SIGNAL_NEUTRAL_TTL_MS` | `1000` | TTL of a neutral snapshot |
 | `APP_SIGNAL_SUPPORTED_FEATURE_SET_VERSIONS` | `mfs-features-v2` | Comma-separated allowlist of upstream `featureSetVersion`; any other version fails closed to the DLT |
-| `APP_KAFKA_PUBLISH_TIMEOUT_MS` | `5000` | Max wait for the output broker ack; on timeout the send is cancelled and the input goes through retry → DLT |
-| `APP_KAFKA_RETRY_BACKOFF_MS` / `APP_KAFKA_RETRY_MAX_ATTEMPTS` | `1000` / `3` | Listener retry policy before dead-lettering to `<input>.DLT` (mapping/contract errors are not retried) |
+| `APP_KAFKA_PUBLISH_TIMEOUT_MS` | `6500` | Max wait on the consumer thread for the output broker ack. Must be **strictly greater** than `delivery.timeout.ms` (validated at startup). On timeout the wait is abandoned and the input goes through retry → DLT |
+| `APP_KAFKA_PRODUCER_ACKS` / `_REQUEST_TIMEOUT_MS` / `_DELIVERY_TIMEOUT_MS` | `all` / `3000` / `5000` | Output producer durability and in-producer time bounds; `acks=all` and `enable.idempotence=true` are also forced in code. Hierarchy `request < delivery < publish` is validated at startup |
+| `APP_KAFKA_RETRY_BACKOFF_MS` / `APP_KAFKA_RETRY_MAX_ATTEMPTS` | `1000` / `3` | Listener retry policy before dead-lettering to `<input-topic>.DLT`. `max-attempts` = retries **after** the first delivery (`3` → 4 deliveries / publisher attempts). Mapping/contract failures are not retried |
 | `APP_KAFKA_LISTENER_CONCURRENCY` / `_ACK_MODE` / `_POLL_TIMEOUT_MS` / `_AUTO_STARTUP` | `1` / `batch` / `1000` / `true` | `spring.kafka.listener.*`, applied through Boot's container-factory configurer |
-| `APP_KAFKA_PRODUCER_ACKS` / `_DELIVERY_TIMEOUT_MS` / `_REQUEST_TIMEOUT_MS` | `all` / `10000` / `5000` | Output producer durability and bounded in-producer timeouts |
 | `APP_KAFKA_CONSUMER_AUTO_OFFSET_RESET` | `latest` | Offset reset for a new consumer group |
 
-## Operations: bounded failure and metrics
+## Live / replay parity: one validated evaluator
 
-- **Publish is bounded.** `MarketSignalSnapshotPublisher` waits at most `APP_KAFKA_PUBLISH_TIMEOUT_MS` for the ack, then cancels the send and throws; the input record is retried with back-off and finally dead-lettered. The consumer thread never hangs on a slow broker.
-- **Input failures go to `<input>.DLT`.** `AvroMappingException` and `InvalidMarketFeaturesSnapshotException` (unsupported `featureSetVersion`, missing identity) are not retried.
-- **Duplicate input is idempotent downstream:** the same feature snapshot always yields the same `signalSnapshotId`.
-- **Metrics** (Micrometer via actuator `/actuator/metrics`):
+Both the live Kafka path and the in-process replay harness run the **same** application component,
+`ValidatedMarketSignalEvaluator` (`application/.../service`):
 
-| Metric | Tags | Meaning |
-|---|---|---|
-| `mse.snapshots` | `riskLevel`, `marketBias`, `setupSide` | Snapshots produced |
-| `mse.no_trade.reasons` | `type` | RISK_OFF signal types behind no-trade snapshots |
-| `mse.input.age` | — | evaluatedAt − exchange event time (ms) |
-| `mse.evaluate.duration` | — | validate + evaluate |
-| `mse.publish.duration` | `outcome=ok\|failed` | time to broker ack |
-| `mse.e2e.latency` | — | publish ack − exchange event time (ms) |
-| `mse.consume.retries`, `mse.dlt.records`, `mse.dlt.failures` | `topic`, `exception` | listener retries, dead-lettered records, DLT publish failures |
+```
+validate(MarketFeaturesSnapshot)  →  MarketSignalEngine.evaluate(features, evaluatedAt)
+```
 
-Integration tests (`infrastructure/app`) run on an in-JVM `EmbeddedKafka` (KRaft) with a `mock://` Schema Registry — no Docker needed.
-| `APP_KAFKA_PUBLISH_TIMEOUT_MS` | `5000` | Max wait for the output broker ack on the consumer thread; on timeout the send is cancelled and the input goes through retry → DLT |
-| `APP_KAFKA_RETRY_BACKOFF_MS` / `APP_KAFKA_RETRY_MAX_ATTEMPTS` | `1000` / `3` | Listener retry policy before dead-lettering to `<input-topic>.DLT` (mapping/contract failures skip retries) |
-| `APP_KAFKA_LISTENER_CONCURRENCY` / `..._ACK_MODE` / `..._POLL_TIMEOUT_MS` / `..._AUTO_STARTUP` | `1` / `batch` / `1000` / `true` | Standard `spring.kafka.listener.*`, applied through Boot's container factory configurer |
-| `APP_KAFKA_PRODUCER_ACKS` / `..._DELIVERY_TIMEOUT_MS` / `..._REQUEST_TIMEOUT_MS` | `all` / `10000` / `5000` | Output producer durability and in-producer time bounds |
-| `APP_KAFKA_CONSUMER_AUTO_OFFSET_RESET` | `latest` | Where a new consumer group starts |
+- Live (`MarketSignalHandleService`): `evaluatedAt = Instant.now(clock)` from the injected `Clock`
+  (no hidden wall-clock read inside the application flow) → evaluator → publisher → metrics.
+- Replay (`ReplayHarness`): `evaluatedAt` comes from an explicit resolver
+  (`Function<MarketFeaturesSnapshot, Instant>`, default `computedAt` or `eventTime`, or `fixed(...)`)
+  → the same evaluator. No publishing, no metrics, no Kafka/Spring.
+- Invariant: same `MarketFeaturesSnapshot` + same `evaluatedAt` + same configuration ⇒ same
+  `MarketSignalSnapshot` (same deterministic `signalSnapshotId`) or the same validation exception.
+  Replay never bypasses `MarketFeaturesSnapshotValidator`; a snapshot rejected in Kafka is rejected
+  identically in replay. `StandardSignalEngine` remains the single rule wiring — there is no second
+  copy of the production rules for replay.
+- Fail-fast: `null` input is a validation error, `null evaluatedAt` and a `null` engine result are
+  programming errors (`IllegalArgumentException` / `IllegalStateException`); invalid input never
+  reaches the engine or the publisher, engine failures are never swallowed, `null` is never published.
 
-## Failure behaviour and metrics
+## MFS v2 input contract validation
 
-Every failure path is bounded: a slow broker cannot block the consumer thread past
-`APP_KAFKA_PUBLISH_TIMEOUT_MS`; a failed publish is retried with back-off and then the input record is
-dead-lettered; Avro mapping errors and contract violations (blank identity, unsupported
-`featureSetVersion`) are non-retryable and go straight to `<input-topic>.DLT`. Input offsets are only
-committed after the output is acknowledged (at-least-once; duplicates carry the same deterministic
-`signalSnapshotId`).
+`MarketFeaturesSnapshotValidator` rejects **contract contradictions** with
+`InvalidMarketFeaturesSnapshotException` (non-retryable → `<input-topic>.DLT`). It does **not**
+reject a valid but bad market state: `DEGRADED`, `UNSAFE`, `NO_DATA`, warm-up, staleness,
+`futureEventDetected` or a failed calculator are legitimate producer outputs — they pass validation
+and the quality gate turns them into a `NO_TRADE` signal snapshot (current policy: `DEGRADED` is a hard
+block). Contract inconsistency → exception / DLT; bad market quality → valid input → no-trade output.
 
-Micrometer metrics (actuator `/actuator/metrics/<name>`):
+Checked invariants (mirroring `market-feature-service` `FeatureQualityCalculator`):
+
+| Area | Rule |
+|---|---|
+| identity / lineage | `snapshotId`, `instrumentId`, `featureSetVersion`, `configHash` non-blank |
+| compatibility | `featureSetVersion` ∈ allowlist (`APP_SIGNAL_SUPPORTED_FEATURE_SET_VERSIONS`); Avro `metadata.schemaVersion` = `1` (MFS v2) |
+| timestamps | `evaluationTs` and `computedAt` non-null, positive; `eventTime` non-null |
+| trigger | `triggerSource` ∈ {`ORDER_BOOK_L2_SNAPSHOT`, `TRADE`, `TIMER`}; `UNKNOWN`/anything else rejected |
+| market-event trigger | `eventTime` positive and `evaluationTs == eventTime` (MFS evaluates as-of the trigger `exchangeTs`); `evaluationTs > computedAt` is allowed only with `quality.futureEventDetected = true` |
+| `TIMER` trigger | `eventTime` may be epoch zero (no source market event); `evaluationTs ≤ computedAt` |
+| quality presence | `quality` and `quality.status` non-null |
+| `OK` | `sourceOrderBookTrusted`, `syncStatus = IN_SYNC`, no stale book/trades, no incomplete book, no warm-up, no future event, no failed calculator, empty `qualityReasons` |
+| `DEGRADED` | at least one degraded cause: a flag (stale book/trades, incomplete book, warm-up, future event), `diagnostics.failedFeatureGroups`, or a degraded reason (`STALE_ORDER_BOOK`, `STALE_TRADES`, `INCOMPLETE_BOOK`, `WARMING_UP`, `FUTURE_EVENT`, `TRADE_HISTORY_GAP`, `CALCULATOR_FAILURE`) |
+| `UNSAFE` | at least one unsafe cause: untrusted book, non-`IN_SYNC` book, or reason ∈ {`NO_ORDER_BOOK`, `BOOK_UNTRUSTED`, `BOOK_OUT_OF_SYNC`, `STALE_ORDER_BOOK_HARD`} |
+| `NO_DATA` | `qualityReasons` contains `NO_MARKET_DATA` |
+| `sourceOrderBookTrusted=false` | valid for `UNSAFE` / `NO_DATA`; contradicts only `OK` |
+| diagnostics | `failedFeatureGroups` ids non-blank (MFS ids: `bbo`, `order-book`, `trade-flow`, `short-term-regime`); failed count ≤ total; a failure is never a neutral feature |
+
+## Availability normalization (input side, not yet trading logic)
+
+`FeatureAvailabilityResolver` (`application/.../domain/availability`) resolves the trade-flow
+rolling windows `1S` / `5S` / `15S` / `60S` to `AVAILABLE | WARMING_UP | UNAVAILABLE | UNTRUSTED | FAILED`
+(`TradeFlowAvailability`). It is pure, deterministic, immutable, and does **not** influence the
+current V1 rules or golden outputs — it is the input foundation for the V2 multi-horizon stage.
+
+- **null ≠ zero.** A real numeric zero (zero imbalance, zero volume, `tradeIntensity = 0`) is an
+  `AVAILABLE` value; an absent value is one of the four non-available states.
+- **Presence markers.** A window is *computed* when any nullable computed metric is non-null
+  (`buy/sell/totalAggressiveVolume`, `signedTradeFlow`, `signedFlowImbalance`, `tradeIntensity`,
+  `avgTradeSize`, `vwap`), or — `15S`/`60S` (nullable counters on the wire): any counter non-null
+  (`0` = measured empty window, `null` = not covered); `1S`/`5S` (counters default to `0` on the
+  wire): a *positive* counter. Known producer limitation: current MFS v2 emits `tradeIntensity = null`
+  for a covered-but-empty 1S/5S window, so it is indistinguishable from an uncovered one and is
+  reported conservatively as not computed.
+- **Precedence (first match wins):** `FAILED` (`diagnostics.failedFeatureGroups` ∋ `trade-flow`, every
+  horizon) → `UNTRUSTED` (`quality.staleTrades`, every horizon; `TRADE_HISTORY_GAP`, the uncovered
+  horizons — MFS leaves exactly the windows spanning the gap uncovered) → `WARMING_UP` (not computed and
+  `quality.warmingUp`) → `UNAVAILABLE` (not computed, no reason) → `AVAILABLE`.
+- Global `warmingUp` does not make every horizon `WARMING_UP`: computed `1S`/`5S` stay `AVAILABLE`
+  while `15S`/`60S` warm up. `sourceOrderBookTrusted` is book quality and never affects trade-flow.
+
+## Failure behaviour, delivery semantics and metrics
+
+- **Delivery is at-least-once.** The input offset is committed only after the output is
+  acknowledged. A publish timeout abandons the wait, but `future.cancel()` does **not** guarantee the
+  Kafka producer drops the record — a listener retry after an ambiguous timeout can produce a
+  **duplicate** output. Downstream deduplicates on the deterministic `signalSnapshotId` (same input +
+  config + `evaluatedAt` ⇒ same id).
+- **Timeout hierarchy** (validated at startup, `PublishTimeoutHierarchy`; invalid values abort
+  startup): `request.timeout.ms (3000) < delivery.timeout.ms (5000) < app.kafka.publish-timeout-ms (6500)`.
+  The producer gives up before the application stops waiting, so most producer failures surface as
+  explicit errors rather than ambiguous timeouts. The producer is idempotent (`enable.idempotence=true`,
+  `acks=all`, forced in code).
+- **Fail-fast publisher.** `MarketSignalSnapshotPublisher` throws on a `null` snapshot (no
+  log-and-skip), refuses a blank topic or non-positive timeout at construction, keeps the bounded wait,
+  restores the interrupt flag on `InterruptedException`, and lets every publish failure propagate to
+  the listener error handler. `PublisherConfiguration` turns a blank `app.kafka.topic.market-signals`
+  or an invalid timeout into an application startup failure.
+- **Retry → DLT.** `SignalPublishException` (bounded publish failure/timeout) is retried with fixed
+  back-off; `FixedBackOff.maxAttempts` (`APP_KAFKA_RETRY_MAX_ATTEMPTS`) counts retries *after* the first
+  delivery, so `3` means 4 deliveries, then the original input record is dead-lettered to
+  `<input-topic>.DLT`. `AvroMappingException` and `InvalidMarketFeaturesSnapshotException` are
+  non-retryable and go straight to the DLT.
+
+Micrometer metrics (actuator `/actuator/metrics/<name>`; unchanged in this stage):
 
 | Metric | Tags | Meaning |
 |---|---|---|
@@ -149,20 +214,26 @@ Micrometer metrics (actuator `/actuator/metrics/<name>`):
 
 Integration tests (`infrastructure/app`) run on an in-JVM `EmbeddedKafka` (KRaft) with a `mock://`
 Schema Registry — no Docker needed: consume → evaluate → publish, duplicate input → same id,
-unsupported contract → DLT, plus a full Spring context test that checks `spring.kafka.listener.*`
-really reach the container.
+unsupported contract → DLT, **publish failure → exact retry count → DLT with the original input and no
+output** (`KafkaPublishFailureDltTest`), a full Spring context test that checks `spring.kafka.listener.*`
+really reach the container, and startup-failure tests for invalid publisher configuration.
 
 ## Replay and golden tests
 
 The engine is stateless and deterministic, so the `application` module ships an in-process replay
 harness: `ReplayHarness.standard(config).replay(List<MarketFeaturesSnapshot>)` runs inputs through
-the **same** rule wiring production uses (`StandardSignalEngine`) and returns one
-`MarketSignalSnapshot` per input. Evaluation time is pinned to the input's `computedAt` (or a fixed
-instant), never to the wall clock, so the same input and config always give the same output.
+the **same validated evaluator and rule wiring production uses** (`ValidatedMarketSignalEvaluator`
+over `StandardSignalEngine`) and returns one `MarketSignalSnapshot` per input. Evaluation time is
+pinned to the input's `computedAt` (or a fixed instant), never to the wall clock, so the same input
+and config always give the same output. `ReplayHarness.standard(config, validator)` accepts an
+explicit validator (e.g. a wider `featureSetVersion` allowlist for recorded data).
 
-`ReplayGoldenTest` replays the synthetic fixtures in `GoldenFixtures` and compares the rendered
-output with `application/src/test/resources/golden/<case>.txt`. A golden mismatch means the
-engine's observable output changed:
+`ReplayGoldenTest` replays the synthetic fixtures in `GoldenFixtures` (complete MFS v2 inputs with
+lineage: `schemaVersion`, `evaluationTs`, `triggerSource`, `configHash`, diagnostics) and compares
+the rendered output with `application/src/test/resources/golden/<case>.txt`. Two fixtures are
+contract-invalid on purpose (`quality-missing`, `quality-status-missing`): the validated replay rejects
+them, and their goldens pin the engine's own defence-in-depth by calling the engine directly. A golden
+mismatch means the engine's observable output changed:
 
 ```bash
 # intended change: regenerate, review the diff, commit the golden update separately

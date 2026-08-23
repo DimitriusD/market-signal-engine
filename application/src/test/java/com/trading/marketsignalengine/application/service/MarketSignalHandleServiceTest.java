@@ -10,6 +10,7 @@ import com.trading.marketsignalengine.application.domain.model.MarketSignalSnaps
 import com.trading.marketsignalengine.application.domain.model.SignalConfiguration;
 import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.rule.SignalRuleTestSupport;
+import com.trading.marketsignalengine.application.domain.service.MarketSignalEngine;
 import com.trading.marketsignalengine.application.domain.service.StandardSignalEngine;
 import com.trading.marketsignalengine.application.domain.validation.InvalidMarketFeaturesSnapshotException;
 import com.trading.marketsignalengine.application.domain.validation.MarketFeaturesSnapshotValidator;
@@ -26,14 +27,16 @@ import org.junit.jupiter.api.Test;
 
 class MarketSignalHandleServiceTest {
 
+    private static final Instant NOW = Instant.parse("2026-01-02T03:04:05Z");
+    private static final Clock CLOCK = Clock.fixed(NOW, ZoneOffset.UTC);
+
     private final RecordingMetrics metrics = new RecordingMetrics();
     private final RecordingPublisher publisher = new RecordingPublisher();
+    private final MarketFeaturesSnapshotValidator validator =
+            new MarketFeaturesSnapshotValidator(Set.of(SignalRuleTestSupport.FEATURE_SET_VERSION));
+    private final MarketSignalEngine engine = StandardSignalEngine.create(SignalConfiguration.defaults(), CLOCK);
     private final MarketSignalHandleService service = new MarketSignalHandleService(
-            StandardSignalEngine.create(SignalConfiguration.defaults(),
-                    Clock.fixed(Instant.parse("2026-01-02T03:04:05Z"), ZoneOffset.UTC)),
-            publisher,
-            new MarketFeaturesSnapshotValidator(Set.of("mfs-core-v1")),
-            metrics);
+            new ValidatedMarketSignalEvaluator(validator, engine), publisher, CLOCK, metrics);
 
     @Test
     void validInputIsEvaluatedPublishedAndReportedInOrder() {
@@ -49,6 +52,15 @@ class MarketSignalHandleServiceTest {
     }
 
     @Test
+    void liveEvaluationInstantComesFromTheInjectedClock() {
+        service.handle(SignalRuleTestSupport.defaultFeatures());
+
+        MarketSignalSnapshot snapshot = publisher.published.getFirst();
+        assertEquals(NOW, snapshot.createdAt());
+        assertEquals(NOW.plusMillis(snapshot.ttlMs()), snapshot.validUntil());
+    }
+
+    @Test
     void validationFailureShortCircuitsBeforeEvaluationAndPublish() {
         MarketFeaturesSnapshot features = SignalRuleTestSupport.tradableFeaturesBuilder()
                 .featureSetVersion("mfs-unknown-v9")
@@ -56,6 +68,58 @@ class MarketSignalHandleServiceTest {
 
         assertThrows(InvalidMarketFeaturesSnapshotException.class, () -> service.handle(features));
 
+        assertTrue(publisher.published.isEmpty());
+        assertTrue(metrics.events.isEmpty());
+    }
+
+    @Test
+    void nullInputIsAValidationFailureAndNeverReachesThePublisher() {
+        assertThrows(InvalidMarketFeaturesSnapshotException.class, () -> service.handle(null));
+
+        assertTrue(publisher.published.isEmpty());
+        assertTrue(metrics.events.isEmpty());
+    }
+
+    @Test
+    void nullEngineOutputFailsFastAndIsNotPublished() {
+        MarketSignalHandleService broken = new MarketSignalHandleService(
+                new ValidatedMarketSignalEvaluator(validator, new MarketSignalEngine() {
+                    @Override
+                    public MarketSignalSnapshot evaluate(MarketFeaturesSnapshot features) {
+                        return null;
+                    }
+
+                    @Override
+                    public MarketSignalSnapshot evaluate(MarketFeaturesSnapshot features, Instant evaluatedAt) {
+                        return null;
+                    }
+                }), publisher, CLOCK, metrics);
+
+        assertThrows(IllegalStateException.class, () -> broken.handle(SignalRuleTestSupport.defaultFeatures()));
+
+        assertTrue(publisher.published.isEmpty());
+        assertTrue(metrics.events.isEmpty());
+    }
+
+    @Test
+    void engineFailureIsNotSwallowed() {
+        MarketSignalHandleService broken = new MarketSignalHandleService(
+                new ValidatedMarketSignalEvaluator(validator, new MarketSignalEngine() {
+                    @Override
+                    public MarketSignalSnapshot evaluate(MarketFeaturesSnapshot features) {
+                        throw new ArithmeticException("boom");
+                    }
+
+                    @Override
+                    public MarketSignalSnapshot evaluate(MarketFeaturesSnapshot features, Instant evaluatedAt) {
+                        throw new ArithmeticException("boom");
+                    }
+                }), publisher, CLOCK, metrics);
+
+        ArithmeticException ex = assertThrows(ArithmeticException.class,
+                () -> broken.handle(SignalRuleTestSupport.defaultFeatures()));
+
+        assertEquals("boom", ex.getMessage());
         assertTrue(publisher.published.isEmpty());
         assertTrue(metrics.events.isEmpty());
     }

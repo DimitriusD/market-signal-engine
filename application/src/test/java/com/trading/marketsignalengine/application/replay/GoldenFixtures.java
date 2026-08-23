@@ -29,6 +29,18 @@ final class GoldenFixtures {
     static final Instant EVENT_TIME = Instant.parse("2026-03-01T10:00:00Z");
     static final Instant RECEIVED_AT = Instant.parse("2026-03-01T10:00:00.020Z");
     static final Instant COMPUTED_AT = Instant.parse("2026-03-01T10:00:00.025Z");
+    /**
+     * Kept at the historical value so the rendered {@code sourceFeatureSetVersion} of every golden
+     * stays byte-identical; the golden harness allowlists it next to {@code mfs-features-v2}.
+     */
+    static final String FEATURE_SET_VERSION = "mfs-core-v2";
+    static final String CONFIG_HASH = "cfg-golden-mfs-v2";
+    /**
+     * Fixtures that are contract-invalid on purpose (they exercise the engine's own defence-in-depth
+     * on quality that the MFS v2 validator would never let through). The validated replay rejects
+     * them; their golden files are checked against the engine directly. See ReplayGoldenTest.
+     */
+    static final java.util.Set<String> CONTRACT_REJECTED = java.util.Set.of("quality-missing", "quality-status-missing");
 
     private GoldenFixtures() {
     }
@@ -130,7 +142,7 @@ final class GoldenFixtures {
                         .qualityReasons(List.of("CALCULATOR_FAILURE", "TRADE_HISTORY_GAP"))
                         .build())
                 .diagnostics(FeatureDiagnostics.builder()
-                        .failedFeatureGroups(List.of("REGIME"))
+                        .failedFeatureGroups(List.of("short-term-regime"))
                         .totalFeatureGroups(6)
                         .build())
                 .build());
@@ -208,10 +220,16 @@ final class GoldenFixtures {
                 .quote("USDT")
                 .symbol("BTCUSDT")
                 .instrumentId("binance:spot:BTCUSDT")
+                .schemaVersion(1)
                 .eventTime(EVENT_TIME)
                 .receivedAt(RECEIVED_AT)
                 .computedAt(COMPUTED_AT)
-                .featureSetVersion("mfs-core-v2")
+                // MFS v2 lineage: a TRADE-triggered snapshot evaluates as-of the trigger exchangeTs.
+                .evaluationTs(EVENT_TIME)
+                .triggerSource("TRADE")
+                .configHash(CONFIG_HASH)
+                .featureSetVersion(FEATURE_SET_VERSION)
+                .diagnostics(FeatureDiagnostics.builder().failedFeatureGroups(List.of()).totalFeatureGroups(4).build())
                 .quality(tradableQuality())
                 .bbo(bbo("1.0"))
                 .book(book("0.10"))

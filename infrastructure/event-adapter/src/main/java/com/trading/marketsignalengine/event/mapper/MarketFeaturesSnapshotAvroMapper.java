@@ -49,6 +49,7 @@ public final class MarketFeaturesSnapshotAvroMapper {
 
         return MarketFeaturesSnapshot.builder()
                 .snapshotId(metadata.getEventId())
+                .schemaVersion(metadata.getSchemaVersion())
                 .exchange(metadata.getExchange())
                 .marketType(metadata.getMarketType())
                 .base(metadata.getBase())

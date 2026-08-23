@@ -1167,6 +1167,37 @@ Opportunity є active тільки коли net edge перевищує versione
 17. Запустити V2 у shadow mode.
 18. Побудувати replay/calibration pipeline.
 
+### Етап 1. Стабілізація поточного V1 engine — ✅ реалізовано 2026-08-23
+
+Мета етапу — зробити V1 детермінованим, однаковим для live/replay і надійним щодо invalid input
+та Kafka failures, **без зміни торгової семантики** (`mse-signals-v8`, thresholds, V1 output
+schema, golden outputs, metrics — незмінні). Зроблено:
+
+1. **Shared validated evaluator.** `ValidatedMarketSignalEvaluator` (validate → evaluate з explicit
+   `evaluatedAt`) використовують і `MarketSignalHandleService` (live, `Instant.now(clock)`), і
+   `ReplayHarness` (explicit resolver). Replay більше не обходить `MarketFeaturesSnapshotValidator`;
+   однаковий input + `evaluatedAt` + config ⇒ однаковий snapshot або однакова validation exception.
+   `StandardSignalEngine` лишається єдиним wiring.
+2. **MFS v2 compatibility validator** (пункт 8 backlog): identity/lineage (`configHash`),
+   `featureSetVersion` allowlist + `schemaVersion = 1`, `evaluationTs`/`computedAt`/`eventTime`,
+   `triggerSource ∈ {ORDER_BOOK_L2_SNAPSHOT, TRADE, TIMER}` (TIMER: eventTime epoch zero дозволено),
+   `evaluationTs == eventTime` для market-event triggers, чесний `futureEventDetected`, consistency
+   aggregate status ↔ flags/reasons/diagnostics за `FeatureQualityCalculator`. Contract contradiction →
+   DLT; DEGRADED/UNSAFE/NO_DATA/warm-up/stale/failed calculator — валідний input → V1 no-trade.
+3. **Availability normalization (input side)**: `FeatureAvailabilityResolver` → `TradeFlowAvailability`
+   (1S/5S/15S/60S: AVAILABLE / WARMING_UP / UNAVAILABLE / UNTRUSTED / FAILED; null ≠ zero;
+   precedence FAILED → UNTRUSTED → WARMING_UP → UNAVAILABLE → AVAILABLE). Фундамент для Фази 2
+   (пункт 9 backlog), trading logic ще не використовує.
+4. **Kafka reliability**: hierarchy `request.timeout.ms 3000 < delivery.timeout.ms 5000 <
+   publish-timeout 6500` з startup validation (`PublishTimeoutHierarchy`), `enable.idempotence=true`,
+   `acks=all`; at-least-once і можливі duplicates після ambiguous timeout задокументовано
+   (dedup на `signalSnapshotId`); integration test publish failure → retry (точна кількість спроб) → DLT.
+5. **Fail-fast**: publisher кидає на null snapshot / blank topic / non-positive timeout; invalid
+   publisher configuration ламає startup; handle service не ковтає validation/evaluation failures.
+
+Поза етапом (наступний етап — V2 domain model): MarketInterpretation domain, V2 mapper/topic,
+per-horizon assessments, cross-horizon interpretation, opportunity resolver.
+
 ## 16. Test strategy
 
 ### Unit tests

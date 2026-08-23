@@ -8,11 +8,15 @@ import lombok.Builder;
  * Domain view of one MFS v2 {@code MarketFeaturesSnapshotEvent}. Identity and timing come from the
  * event metadata; {@code evaluationTs} is the upstream evaluation tick (null when the writer
  * predates the field), {@code triggerSource} says what caused the publish (market event, clock tick,
- * quality transition), {@code configHash} pins the upstream feature configuration for lineage.
+ * quality transition), {@code configHash} pins the upstream feature configuration for lineage,
+ * {@code schemaVersion} is the Avro envelope version the writer declared (validated against the
+ * feature-set compatibility table by {@code MarketFeaturesSnapshotValidator}).
  */
 @Builder(toBuilder = true)
 public record MarketFeaturesSnapshot(
         String snapshotId,
+        /** {@code metadata.schemaVersion} of the source event; MFS v2 publishes 1. Null = not carried (writer predates it). */
+        Integer schemaVersion,
         String exchange,
         String marketType,
         String base,

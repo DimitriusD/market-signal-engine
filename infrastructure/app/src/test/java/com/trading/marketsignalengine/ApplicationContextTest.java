@@ -12,6 +12,8 @@ import com.trading.marketsignalengine.application.domain.validation.MarketFeatur
 import com.trading.marketsignalengine.application.port.input.MarketFeaturesHandler;
 import com.trading.marketsignalengine.application.port.output.MarketSignalSnapshotPublisherPort;
 import com.trading.marketsignalengine.application.port.output.SignalMetricsPort;
+import com.trading.marketsignalengine.application.service.ValidatedMarketSignalEvaluator;
+import com.trading.marketsignalengine.event.config.PublishTimeoutHierarchy;
 import com.trading.marketsignalengine.event.metrics.MicrometerSignalMetrics;
 import com.trading.marketsignalengine.event.publisher.MarketSignalSnapshotPublisher;
 import java.math.BigDecimal;
@@ -38,7 +40,7 @@ import org.springframework.kafka.listener.MessageListenerContainer;
         "spring.kafka.listener.concurrency=3",
         "spring.kafka.listener.ack-mode=record",
         "spring.kafka.listener.poll-timeout=1234",
-        "app.kafka.publish-timeout-ms=2500",
+        "app.kafka.publish-timeout-ms=7000",
         "app.signal.signal-set-version=mse-signals-v8",
         "app.signal.max-spread-bps=3.5",
         "app.signal.supported-feature-set-versions=mfs-features-v2,mfs-core-v2"
@@ -60,6 +62,10 @@ class ApplicationContextTest {
             marketFeaturesKafkaListenerContainerFactory;
     @Autowired
     private KafkaListenerEndpointRegistry registry;
+    @Autowired
+    private PublishTimeoutHierarchy publishTimeoutHierarchy;
+    @Autowired
+    private ValidatedMarketSignalEvaluator evaluator;
 
     @Test
     void signalConfigurationComesFromProperties() {
@@ -75,7 +81,16 @@ class ApplicationContextTest {
     @Test
     void publisherIsBoundedByConfiguredTimeout() {
         MarketSignalSnapshotPublisher p = assertInstanceOf(MarketSignalSnapshotPublisher.class, publisher);
-        assertEquals(Duration.ofMillis(2500), p.publishTimeout());
+        assertEquals(Duration.ofMillis(7000), p.publishTimeout());
+        assertEquals("state.market.signals.v1", p.topic());
+        // request (3000) < delivery (5000) from application.yml < publish (7000) from this test
+        assertEquals(new PublishTimeoutHierarchy(3000L, 5000L, 7000L), publishTimeoutHierarchy);
+    }
+
+    @Test
+    void liveHandlerUsesTheSharedValidatedEvaluator() {
+        assertNotNull(evaluator);
+        assertEquals(Set.of("mfs-features-v2", "mfs-core-v2"), evaluator.validator().supportedFeatureSetVersions());
     }
 
     @Test

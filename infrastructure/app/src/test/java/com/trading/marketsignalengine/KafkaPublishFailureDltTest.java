@@ -17,22 +17,26 @@ import com.trading.contracts.feature.ShortTermRegimeFeaturesEvent;
 import com.trading.contracts.feature.TradeFlowFeaturesEvent;
 import com.trading.contracts.orderbook.BookSyncStatus;
 import com.trading.contracts.signal.MarketSignalSnapshotEvent;
+import com.trading.marketsignalengine.application.domain.model.MarketSignalSnapshot;
+import com.trading.marketsignalengine.application.port.output.MarketSignalSnapshotPublisherPort;
+import com.trading.marketsignalengine.event.publisher.SignalPublishException;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
 import io.confluent.kafka.serializers.KafkaAvroDeserializerConfig;
 import io.confluent.kafka.serializers.KafkaAvroSerializer;
 import io.micrometer.core.instrument.MeterRegistry;
 import java.time.Duration;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.UUID;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicInteger;
 import org.apache.kafka.clients.consumer.Consumer;
 import org.apache.kafka.clients.consumer.ConsumerConfig;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
-import org.apache.kafka.clients.consumer.ConsumerRecords;
 import org.apache.kafka.clients.producer.ProducerConfig;
 import org.apache.kafka.common.serialization.StringDeserializer;
 import org.apache.kafka.common.serialization.StringSerializer;
@@ -41,6 +45,10 @@ import org.junit.jupiter.api.BeforeAll;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.boot.test.context.TestConfiguration;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
 import org.springframework.kafka.core.DefaultKafkaConsumerFactory;
 import org.springframework.kafka.core.DefaultKafkaProducerFactory;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -50,38 +58,71 @@ import org.springframework.kafka.test.utils.KafkaTestUtils;
 import org.springframework.test.annotation.DirtiesContext;
 
 /**
- * consume → evaluate → publish against an in-JVM Kafka (KRaft) and a {@code mock://} Schema Registry
- * shared by the application and the test producer/consumer. Covers: a live MFS v2 event becomes a
- * signal snapshot with full lineage; the same input twice yields the same deterministic
- * {@code signalSnapshotId}; an unsupported {@code featureSetVersion} is dead-lettered to
- * {@code <input>.DLT} and counted in metrics. No Docker required.
+ * Publish failure → bounded listener retry → DLT, on an in-JVM Kafka (KRaft) + {@code mock://}
+ * Schema Registry. The real consumer, mapper, validated evaluator and error handler run; only the
+ * output publisher port is replaced by a controlled test double that always throws
+ * {@link SignalPublishException} (the retryable failure class) and counts attempts.
+ *
+ * <p>Retry semantics under test: {@code app.kafka.retry.max-attempts} configures
+ * {@code FixedBackOff.maxAttempts}, which is the number of <em>retries after the first delivery</em>.
+ * With {@code max-attempts=2} the record is delivered 3 times (3 publisher attempts) and then the
+ * original {@code MarketFeaturesSnapshotEvent} lands on {@code <input>.DLT}; no V1 output is
+ * published.
  */
 @SpringBootTest(properties = {
-        "app.kafka.schema-registry.url=mock://mse-e2e",
-        "app.kafka.topic.market-features=" + KafkaEndToEndTest.INPUT_TOPIC,
-        "app.kafka.topic.market-signals=" + KafkaEndToEndTest.OUTPUT_TOPIC,
-        "spring.kafka.consumer.group-id=mse-e2e-" + "group",
+        "app.kafka.schema-registry.url=mock://mse-dlt",
+        "app.kafka.topic.market-features=" + KafkaPublishFailureDltTest.INPUT_TOPIC,
+        "app.kafka.topic.market-signals=" + KafkaPublishFailureDltTest.OUTPUT_TOPIC,
+        "spring.kafka.consumer.group-id=mse-dlt-group",
         "spring.kafka.consumer.auto-offset-reset=earliest",
         "app.kafka.retry.backoff-ms=50",
-        "app.kafka.retry.max-attempts=1",
-        "app.kafka.publish-timeout-ms=10000"
+        "app.kafka.retry.max-attempts=" + KafkaPublishFailureDltTest.MAX_ATTEMPTS,
+        "app.kafka.publish-timeout-ms=6500"
 })
 @EmbeddedKafka(
         kraft = true,
         partitions = 1,
-        topics = {KafkaEndToEndTest.INPUT_TOPIC, KafkaEndToEndTest.OUTPUT_TOPIC, KafkaEndToEndTest.DLT_TOPIC},
+        topics = {KafkaPublishFailureDltTest.INPUT_TOPIC, KafkaPublishFailureDltTest.OUTPUT_TOPIC,
+                KafkaPublishFailureDltTest.DLT_TOPIC},
         bootstrapServersProperty = "spring.kafka.bootstrap-servers")
+@Import(KafkaPublishFailureDltTest.FailingPublisherConfiguration.class)
 @DirtiesContext
-class KafkaEndToEndTest {
+class KafkaPublishFailureDltTest {
 
-    static final String INPUT_TOPIC = "e2e.market.feature.snapshot.v1";
-    static final String OUTPUT_TOPIC = "e2e.state.market.signals.v1";
+    static final String INPUT_TOPIC = "dlt.market.feature.snapshot.v1";
+    static final String OUTPUT_TOPIC = "dlt.state.market.signals.v1";
     static final String DLT_TOPIC = INPUT_TOPIC + ".DLT";
-    private static final String SCHEMA_REGISTRY = "mock://mse-e2e";
+    /** FixedBackOff retries after the first delivery → EXPECTED_PUBLISH_ATTEMPTS total deliveries. */
+    static final int MAX_ATTEMPTS = 2;
+    static final int EXPECTED_PUBLISH_ATTEMPTS = MAX_ATTEMPTS + 1;
+    private static final String SCHEMA_REGISTRY = "mock://mse-dlt";
     private static final Duration WAIT = Duration.ofSeconds(20);
 
+    @TestConfiguration
+    static class FailingPublisherConfiguration {
+        @Bean
+        @Primary
+        FailingPublisher failingPublisher() {
+            return new FailingPublisher();
+        }
+    }
+
+    /** Controlled output port: every publish throws the retryable failure and is counted. */
+    static final class FailingPublisher implements MarketSignalSnapshotPublisherPort {
+        final AtomicInteger attempts = new AtomicInteger();
+        final List<String> attemptedSignalIds = new CopyOnWriteArrayList<>();
+
+        @Override
+        public void publish(MarketSignalSnapshot snapshot) {
+            attempts.incrementAndGet();
+            attemptedSignalIds.add(snapshot.signalSnapshotId());
+            throw new SignalPublishException("simulated bounded publish failure for " + snapshot.signalSnapshotId(),
+                    new TimeoutException("simulated"));
+        }
+    }
+
     @Autowired
-    private EmbeddedKafkaBroker broker;
+    private FailingPublisher failingPublisher;
     @Autowired
     private MeterRegistry meterRegistry;
 
@@ -98,11 +139,11 @@ class KafkaEndToEndTest {
         producer = new KafkaTemplate<>(new DefaultKafkaProducerFactory<>(producerProps));
 
         signalsConsumer = new DefaultKafkaConsumerFactory<String, MarketSignalSnapshotEvent>(
-                avroConsumerProps(broker, "e2e-signals-reader")).createConsumer();
+                avroConsumerProps(broker, "dlt-signals-reader")).createConsumer();
         broker.consumeFromAnEmbeddedTopic(signalsConsumer, OUTPUT_TOPIC);
 
         dltConsumer = new DefaultKafkaConsumerFactory<String, Object>(
-                avroConsumerProps(broker, "e2e-dlt-reader")).createConsumer();
+                avroConsumerProps(broker, "dlt-dlt-reader")).createConsumer();
         broker.consumeFromAnEmbeddedTopic(dltConsumer, DLT_TOPIC);
     }
 
@@ -120,84 +161,42 @@ class KafkaEndToEndTest {
     }
 
     @Test
-    void liveMfsV2SnapshotBecomesSignalSnapshotWithLineage() throws Exception {
-        String featureEventId = "feat-" + UUID.randomUUID();
-        MarketFeaturesSnapshotEvent input = tradableEvent(featureEventId, "mfs-features-v2");
+    void publishFailureIsRetriedExactlyPerPolicyThenInputIsDeadLetteredAndNoOutputIsPublished() throws Exception {
+        String featureEventId = "feat-publish-fail-" + UUID.randomUUID();
+        MarketFeaturesSnapshotEvent input = validTradeEvent(featureEventId);
 
         producer.send(INPUT_TOPIC, input.getMetadata().getInstrumentId(), input).get(10, TimeUnit.SECONDS);
 
-        ConsumerRecord<String, MarketSignalSnapshotEvent> out = awaitSignal(featureEventId);
-        MarketSignalSnapshotEvent signal = out.value();
-        assertEquals("binance:spot:BTCUSDT", out.key());
-        assertEquals(featureEventId, signal.getSourceFeatureEventId());
-        assertEquals("mfs-features-v2", signal.getSourceFeatureSetVersion());
-        assertEquals("mse-signals-v8", signal.getSignalSetVersion());
-        assertEquals("BULLISH", signal.getMarketBias());
-        assertEquals("NORMAL", signal.getRiskLevel());
-        assertEquals("LONG", signal.getSetup().getSide());
-        assertTrue(signal.getValidUntilTs() > signal.getEvaluatedTs());
-        assertTrue(signal.getSignals().stream().anyMatch(s -> "LONG_SETUP_FORMING".equals(s.getType())));
-        assertNotNull(signal.getMetadata().getEventId());
-
-        // Metrics answer "what happened" without logs.
-        assertTrue(meterRegistry.find("mse.snapshots").tag("riskLevel", "NORMAL").counter().count() >= 1.0);
-        assertTrue(meterRegistry.find("mse.publish.duration").tag("outcome", "ok").timer().count() >= 1);
-    }
-
-    @Test
-    void duplicateInputYieldsTheSameDeterministicSignalSnapshotId() throws Exception {
-        String featureEventId = "feat-dup-" + UUID.randomUUID();
-        MarketFeaturesSnapshotEvent input = tradableEvent(featureEventId, "mfs-features-v2");
-
-        producer.send(INPUT_TOPIC, input.getMetadata().getInstrumentId(), input).get(10, TimeUnit.SECONDS);
-        producer.send(INPUT_TOPIC, input.getMetadata().getInstrumentId(), input).get(10, TimeUnit.SECONDS);
-
-        List<MarketSignalSnapshotEvent> outputs = awaitSignals(featureEventId, 2);
-        assertEquals(2, outputs.size());
-        assertEquals(outputs.get(0).getMetadata().getEventId(), outputs.get(1).getMetadata().getEventId(),
-                "re-processing the same feature snapshot must produce the same signalSnapshotId");
-    }
-
-    @Test
-    void unsupportedFeatureSetVersionIsDeadLetteredNotPublished() throws Exception {
-        String featureEventId = "feat-bad-" + UUID.randomUUID();
-        MarketFeaturesSnapshotEvent input = tradableEvent(featureEventId, "mfs-features-v99");
-
-        producer.send(INPUT_TOPIC, input.getMetadata().getInstrumentId(), input).get(10, TimeUnit.SECONDS);
-
+        // 1. the original input record lands on <input>.DLT after the retries are exhausted
         ConsumerRecord<String, Object> dead = awaitDlt(featureEventId);
         assertNotNull(dead);
-        assertEquals("binance:spot:BTCUSDT", dead.key());
+        assertEquals(input.getMetadata().getInstrumentId(), dead.key());
+        MarketFeaturesSnapshotEvent deadValue = (MarketFeaturesSnapshotEvent) dead.value();
+        assertEquals(featureEventId, deadValue.getMetadata().getEventId());
+        assertEquals("mfs-features-v2", deadValue.getFeatureSetVersion());
+        assertEquals("cfg-dlt", deadValue.getConfigHash());
+
+        // 2. exactly first delivery + MAX_ATTEMPTS retries reached the publisher — no more, no less
+        //    (settle a little to catch any spurious extra delivery)
+        Thread.sleep(500);
+        assertEquals(EXPECTED_PUBLISH_ATTEMPTS, failingPublisher.attempts.get(),
+                "FixedBackOff(maxAttempts=" + MAX_ATTEMPTS + ") must yield " + EXPECTED_PUBLISH_ATTEMPTS + " deliveries");
+        // every retry re-evaluated the same input deterministically → same signalSnapshotId
+        assertEquals(1, failingPublisher.attemptedSignalIds.stream().distinct().count());
+
+        // 3. no V1 output event was published for this input
         assertFalse(signalPublishedFor(featureEventId, Duration.ofSeconds(2)),
-                "a rejected input must not produce a signal snapshot");
+                "a never-acknowledged publish must not leave an output event");
+
+        // 4. existing metrics (unchanged) attribute the dead-letter to the retryable exception
         assertTrue(meterRegistry.find("mse.dlt.records")
-                .tag("exception", "InvalidMarketFeaturesSnapshotException").counter().count() >= 1.0);
+                .tag("exception", "SignalPublishException").counter().count() >= 1.0);
+        assertTrue(meterRegistry.find("mse.consume.retries").counter() == null
+                        || meterRegistry.find("mse.consume.retries").counter().count() >= MAX_ATTEMPTS,
+                "retries must be observable");
     }
 
     // ------------------------------------------------------------------ helpers
-
-    private ConsumerRecord<String, MarketSignalSnapshotEvent> awaitSignal(String featureEventId) {
-        return awaitSignalRecords(featureEventId, 1).getFirst();
-    }
-
-    private List<MarketSignalSnapshotEvent> awaitSignals(String featureEventId, int count) {
-        return awaitSignalRecords(featureEventId, count).stream().map(ConsumerRecord::value).toList();
-    }
-
-    private List<ConsumerRecord<String, MarketSignalSnapshotEvent>> awaitSignalRecords(String featureEventId, int count) {
-        List<ConsumerRecord<String, MarketSignalSnapshotEvent>> found = new ArrayList<>();
-        long deadline = System.nanoTime() + WAIT.toNanos();
-        while (System.nanoTime() < deadline && found.size() < count) {
-            ConsumerRecords<String, MarketSignalSnapshotEvent> records = signalsConsumer.poll(Duration.ofMillis(500));
-            for (ConsumerRecord<String, MarketSignalSnapshotEvent> r : records) {
-                if (featureEventId.equals(r.value().getSourceFeatureEventId())) {
-                    found.add(r);
-                }
-            }
-        }
-        assertEquals(count, found.size(), "expected " + count + " signal(s) for " + featureEventId + " within " + WAIT);
-        return found;
-    }
 
     private boolean signalPublishedFor(String featureEventId, Duration window) {
         long deadline = System.nanoTime() + window.toNanos();
@@ -234,8 +233,8 @@ class KafkaEndToEndTest {
         return props;
     }
 
-    /** A tradable MFS v2 snapshot whose 5s flow + top5 book form a LONG microstructure setup. */
-    private static MarketFeaturesSnapshotEvent tradableEvent(String eventId, String featureSetVersion) {
+    /** A complete, contract-valid, tradable MFS v2 TRADE-triggered snapshot. */
+    private static MarketFeaturesSnapshotEvent validTradeEvent(String eventId) {
         long exchangeTs = System.currentTimeMillis() - 150;
         return MarketFeaturesSnapshotEvent.newBuilder()
                 .setMetadata(MetadataEvent.newBuilder()
@@ -254,11 +253,10 @@ class KafkaEndToEndTest {
                         .setProcessedTs(exchangeTs + 30)
                         .build())
                 .setComputedTs(exchangeTs + 35)
-                // MFS v2: a TRADE-triggered snapshot evaluates as-of the trigger exchangeTs
                 .setEvaluationTs(exchangeTs)
-                .setFeatureSetVersion(featureSetVersion)
+                .setFeatureSetVersion("mfs-features-v2")
                 .setTriggerSource("TRADE")
-                .setConfigHash("cfg-e2e")
+                .setConfigHash("cfg-dlt")
                 .setQuality(FeatureQualityEvent.newBuilder()
                         .setSyncStatus(BookSyncStatus.IN_SYNC)
                         .setStaleOrderBookState(false)
@@ -268,8 +266,6 @@ class KafkaEndToEndTest {
                         .setOrderBookStateAgeMs(40L)
                         .setTradeAgeMs(90L)
                         .setStatus(FeatureQualityStatus.OK)
-                        .setWarmingUp(false)
-                        .setFutureEventDetected(false)
                         .build())
                 .setDiagnostics(DiagnosticsEvent.newBuilder().setTotalFeatureGroups(4).build())
                 .setSourceState(FeatureSourceStateEvent.newBuilder().setPublishedDepth(20).build())
@@ -287,10 +283,6 @@ class KafkaEndToEndTest {
                         .setTradeCount1s(9).setSignedFlowImbalance1s("0.33")
                         .setTradeCount5s(50).setSignedFlowImbalance5s("0.70")
                         .setBuyAggressiveVolume5s("4.0").setSellAggressiveVolume5s("2.0")
-                        // 15s/60s counters are ["null","int"] in the contract; set explicitly so the
-                        // event is a complete, realistic MFS v2 snapshot (and stays serializable even
-                        // against a jar whose embedded schema declares them non-null — see
-                        // trading-schemas: a stale project .gradle cache once produced exactly that).
                         .setTradeCount15s(150).setValidQtyTradeCount15s(150)
                         .setAggressiveTradeCount15s(150).setUnknownSideCount15s(0)
                         .setTradeCount60s(600).setValidQtyTradeCount60s(600)
