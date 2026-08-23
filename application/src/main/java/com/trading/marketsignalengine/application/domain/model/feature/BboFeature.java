@@ -3,7 +3,7 @@ package com.trading.marketsignalengine.application.domain.model.feature;
 import java.math.BigDecimal;
 import lombok.Builder;
 
-@Builder
+@Builder(toBuilder = true)
 public record BboFeature(
         BigDecimal bestBidPrice,
         BigDecimal bestAskPrice,
