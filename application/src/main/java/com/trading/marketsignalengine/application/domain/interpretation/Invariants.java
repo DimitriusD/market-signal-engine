@@ -10,35 +10,37 @@ import java.util.List;
 import java.util.Set;
 
 /**
- * Package-private invariant helpers shared by the V2 value objects: defensive, immutable,
+ * Invariant helpers shared by the V2 value objects (this package) and the quality layer
+ * ({@code interpretation.quality}): defensive, immutable,
  * null-element-free, duplicate-free collections with a canonical order where one exists.
+ * Not an API for callers outside the domain.
  */
-final class Invariants {
+public final class Invariants {
 
     private Invariants() {
     }
 
-    static void require(boolean condition, String message) {
+    public static void require(boolean condition, String message) {
         if (!condition) {
             throw new IllegalArgumentException(message);
         }
     }
 
-    static <T> T requireNonNull(T value, String field) {
+    public static <T> T requireNonNull(T value, String field) {
         if (value == null) {
             throw new IllegalArgumentException(field + " must not be null");
         }
         return value;
     }
 
-    static String requireNonBlank(String value, String field) {
+    public static String requireNonBlank(String value, String field) {
         if (value == null || value.isBlank()) {
             throw new IllegalArgumentException(field + " must not be blank");
         }
         return value;
     }
 
-    static Instant requirePositiveInstant(Instant value, String field) {
+    public static Instant requirePositiveInstant(Instant value, String field) {
         if (value == null) {
             throw new IllegalArgumentException(field + " must not be null");
         }
@@ -53,7 +55,7 @@ final class Invariants {
      * duplicates are rejected (a repeated reason is a producer bug, not a stronger reason); insertion
      * order is preserved because it is the producer's explanation order.
      */
-    static List<ReasonCode> reasonCodes(Collection<ReasonCode> codes, String field) {
+    public static List<ReasonCode> reasonCodes(Collection<ReasonCode> codes, String field) {
         if (codes == null) {
             return List.of();
         }
@@ -74,7 +76,7 @@ final class Invariants {
      * null elements and duplicates are rejected; any input order is accepted and normalised (safe,
      * because uniqueness is enforced first, so normalisation cannot hide information).
      */
-    static List<MarketHorizon> canonicalHorizons(Collection<MarketHorizon> horizons, String field) {
+    public static List<MarketHorizon> canonicalHorizons(Collection<MarketHorizon> horizons, String field) {
         if (horizons == null) {
             return List.of();
         }
@@ -96,7 +98,7 @@ final class Invariants {
         return List.copyOf(ordered);
     }
 
-    static <T> List<T> requireNoNulls(Collection<T> items, String field) {
+    public static <T> List<T> requireNoNulls(Collection<T> items, String field) {
         if (items == null) {
             return List.of();
         }

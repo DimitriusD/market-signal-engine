@@ -193,6 +193,35 @@ only from lineage). `MarketHorizon` is the single horizon type shared with the a
 Evaluators, the V2 Avro mapper/publisher/topic and Spring wiring are **not** implemented yet; V1
 (`mse-signals-v8`) remains the runtime and regression baseline. Details: roadmap §15, "Етап 2".
 
+## Quality assessment and per-horizon eligibility (Stage 3, pure, not yet wired)
+
+`application/.../domain/interpretation/quality` turns a **validated** `MarketFeaturesSnapshot` plus an
+explicit `assessedAt` and a `QualityEligibilityPolicy` (`maxFeatureAge`, `maxProcessingLatency`,
+`blockFutureEvents`; no defaults, no production values yet) into a typed `QualityAssessment`:
+`FeatureAvailabilityResolver → HorizonEligibilityResolver → TimingAssessmentResolver →
+QualityAssessmentResolver`. Pure and deterministic (no Spring/Kafka/Avro/`Clock`/metrics): same
+snapshot + `assessedAt` + policy ⇒ same result.
+
+- **Exactly four `HorizonEligibility`** (`HorizonEligibilities`, canonical `1S, 5S, 15S, 60S`), each decided
+  independently from trade-flow availability: `AVAILABLE → ELIGIBLE`, `WARMING_UP → WARMING_UP`,
+  `UNAVAILABLE → UNAVAILABLE`, `UNTRUSTED → UNTRUSTED`, `FAILED → FAILED`; source `NO_DATA` → every horizon
+  `UNAVAILABLE [SOURCE_NO_DATA]`. Computed `1S/5S` stay `ELIGIBLE` while `15S/60S` warm up or span a
+  history gap; `null` never becomes ELIGIBLE / zero / NEUTRAL.
+- **Timing** (`TimingAssessment`): `featureAgeMs = assessedAt − evaluationTs`,
+  `processingLatencyMs = assessedAt − computedAt`; negative values are reported, never clamped, and mean
+  `CLOCK_SKEW` (wins over `STALE`); thresholds are inclusive (`age <= max` fresh, `age > max` stale).
+  `evaluationTs` (market as-of) and `assessedAt` (engine assessment instant) are never confused.
+- **Global policy**: `NO_DATA → NO_DATA`; `UNSAFE` / clock skew / stale / (policy-blocked) future event →
+  `BLOCKED`, never eligible; source `OK` + all horizons eligible + fresh → `OK`; otherwise `DEGRADED`,
+  eligible for trading iff at least one horizon is `ELIGIBLE` (meaning only that interpretation may
+  continue). A hard gate does not rewrite a valid trade-flow horizon to `FAILED`.
+- **Per-feature degradation**: typed `FeatureGroupId` (`bbo`, `order-book`, `trade-flow`,
+  `short-term-regime`; unknown ids preserved). `trade-flow` failed → all horizons `FAILED`; other failed
+  groups are kept in `failedFeatureGroups` and degrade overall quality without failing trade-flow horizons.
+
+No directional logic, no opportunity, no V2 runtime path, no live `Clock` wiring yet; V1 (`mse-signals-v8`)
+goldens, metrics and Kafka runtime are unchanged. Details: roadmap §15, "Етап 3".
+
 ## Failure behaviour, delivery semantics and metrics
 
 - **Delivery is at-least-once.** The input offset is committed only after the output is

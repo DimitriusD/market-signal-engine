@@ -27,8 +27,9 @@
  *   <li><b>No trading commands, no probabilities.</b> {@code MarketOpportunity} is an interpretation for
  *       a downstream strategy, not BUY/SELL; {@code EvidenceStrength} is heuristic evidence in [0,1],
  *       not a calibrated confidence or probability.</li>
- *   <li><b>No evaluation logic yet.</b> This package defines the language and the invariants of the V2
- *       engine; evaluators (flow / momentum / volatility / book, eligibility, quality, cross-horizon,
+ *   <li><b>No directional evaluation logic.</b> This package defines the language and the invariants of the V2
+ *       engine; the quality layer (eligibility / timing / quality resolvers) lives in the
+ *       {@code interpretation.quality} subpackage; evaluators (flow / momentum / volatility / book, cross-horizon,
  *       opportunity) are a later stage.</li>
  * </ul>
  */

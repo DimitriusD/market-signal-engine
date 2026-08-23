@@ -924,6 +924,9 @@ Text summary потрібен людині. Typed factors потрібні tests
 
 ### Фаза 2. Quality assessment і horizon eligibility
 
+> Статус: пункти 1–8 реалізовані як pure domain layer в Етапі 3 (§15, «Етап 3»); пункт 9
+> (directional leakage у V1 no-trade path) лишається відкритим і не входить в Етап 3.
+
 #### Роботи
 
 1. Створити `QualityAssessment`.
@@ -1266,6 +1269,124 @@ wiring / shadow publishing, V1↔V2 projections, нові metrics, schema finger
 probability / confidence, cost/edge model. V2 runtime path не публікує штучних UNKNOWN/BLOCKED
 snapshots, поки немає evaluators. **Milestone B не завершений**: domain model та invariants готові,
 evaluation logic, Avro output і Kafka publishing ще не реалізовані.
+
+### Етап 3. Quality Assessment та Horizon Eligibility — ✅ реалізовано 2026-08-23
+
+Мета етапу — перетворити **validated** `MarketFeaturesSnapshot` на typed `QualityAssessment`
+(roadmap Фаза 2 / §8.2 Quality layer / §9.1): загальний `InterpretationQuality`, `TimingAssessment`,
+typed failed feature groups і рівно чотири `HorizonEligibility` для `1S/5S/15S/60S`. Це **не**
+directional analysis: жодних BULLISH/BEARISH, strength, opportunity. V1 лишається runtime і regression
+baseline (`mse-signals-v8`, golden outputs, metrics, Kafka semantics — незмінні).
+
+Пакет `application/.../domain/interpretation/quality` (pure: без Spring/Kafka/Avro/infrastructure/
+`Clock`/`Instant.now()`/metrics). Pipeline, де однаковий snapshot + `assessedAt` + policy ⇒ однаковий
+результат:
+
+```text
+MarketFeaturesSnapshot + explicit assessedAt + QualityEligibilityPolicy
+  → FeatureAvailabilityResolver   (Stage 1: чи є trade-flow window)
+  → HorizonEligibilityResolver    (policy verdict per horizon → HorizonEligibilities)
+  → TimingAssessmentResolver      (feature age / processing latency vs policy → TimingAssessment)
+  → QualityAssessmentResolver     (global hard gates + overall quality)
+  → QualityAssessment { sourceQualityStatus, interpretationQuality, timing, horizonEligibilities,
+                        failedFeatureGroups, futureEventDetected, reasonCodes }
+```
+
+1. **Два моменти часу не змішуються.** `snapshot.evaluationTs` — market-as-of instant, за яким MFS
+   рахував windows; `assessedAt` — момент, коли engine оцінює freshness (live: injected Clock —
+   пізніший етап; replay: recorded/fixed instant). Resolver отримує `assessedAt` explicit; live wiring
+   на цьому етапі не робиться.
+2. **`QualityEligibilityPolicy`** (`maxFeatureAge`, `maxProcessingLatency`, `blockFutureEvents`):
+   immutable, durations non-null і strictly positive, жодних defaults усередині resolvers і жодних
+   production values (Spring properties — пізніше). Межа inclusive: `age <= max` → ok, `age > max` →
+   stale. Це safety policy, не trading weights.
+3. **Timing formulas** (`TimingAssessment`, без clamp):
+   `featureAgeMs = assessedAt − evaluationTs`, `processingLatencyMs = assessedAt − computedAt`.
+   `featureAgeMs < 0 || processingLatencyMs < 0` → `CLOCK_SKEW` (`SOURCE_CLOCK_SKEW`; негативний age
+   додатково `SOURCE_FUTURE_EVENT`); інакше `age > maxFeatureAge` → `STALE` (`FEATURE_SNAPSHOT_STALE`),
+   `latency > maxProcessingLatency` → `STALE` (`PROCESSING_LATENCY_EXCEEDED`), обидва можуть бути разом;
+   інакше `FRESH`. `CLOCK_SKEW` має пріоритет над `STALE`. `UNKNOWN` — fail-closed vocabulary, для
+   validated input не генерується. Record re-derives ms-значення з instants і enforce-ить таблицю
+   status ↔ values.
+4. **Availability → eligibility** (`HorizonEligibilityResolver`, per horizon незалежно):
+   `AVAILABLE → ELIGIBLE` (reasonCodes порожні; `WINDOW_COMPUTED` не переноситься), `WARMING_UP →
+   WARMING_UP [WINDOW_WARMING_UP]`, `UNAVAILABLE → UNAVAILABLE [WINDOW_NOT_COMPUTED |
+   TRADE_FLOW_GROUP_ABSENT]`, `UNTRUSTED → UNTRUSTED [STALE_TRADES | TRADE_HISTORY_GAP]`, `FAILED →
+   FAILED [TRADE_FLOW_CALCULATOR_FAILED]`. Спеціальне правило: source `NO_DATA` → усі horizons
+   `UNAVAILABLE [SOURCE_NO_DATA]` (відсутні дані — не «untrusted», навіть якщо upstream поставив
+   `staleTrades=true`). `null` ніколи не стає zero/NEUTRAL/ELIGIBLE. Known 1S/5S covered-but-empty
+   limitation зі Stage 1 збережено консервативно (не вгадуємо coverage).
+5. **Partial warm-up / gap semantics:** global `warmingUp` робить `WARMING_UP` лише не-computed
+   horizons — computed 1S/5S лишаються `ELIGIBLE`, поки 15S/60S warming-up; `TRADE_HISTORY_GAP` робить
+   `UNTRUSTED` лише uncovered horizons; `staleTrades` — усі trade-based horizons `UNTRUSTED`.
+6. **Failed group dependency semantics (per-feature degradation):** `FeatureGroupId` (typed value
+   object: `bbo`, `order-book`, `trade-flow`, `short-term-regime`; невідомий майбутній id зберігається
+   verbatim; immutable, без duplicates). `trade-flow` failed → усі чотири horizons `FAILED`;
+   `bbo`/`order-book`/`short-term-regime` failed → horizons **не** FAILED; такі failures лишаються в
+   `QualityAssessment.failedFeatureGroups`, дають `FEATURE_GROUP_FAILURE` і щонайменше `DEGRADED`, і
+   будуть використані EvidenceAssessment evaluators (наступний етап). BOOK/MOMENTUM/VOLATILITY evidence
+   availability тут не реалізується.
+7. **`HorizonEligibilities`**: рівно один `HorizonEligibility` на `MarketHorizon`, canonical order
+   `1S,5S,15S,60S`, lookup ніколи не null, missing horizon → fail-fast, immutable views.
+8. **Global quality policy** (`QualityAssessmentResolver`, hard gates у порядку NO_DATA → UNSAFE →
+   CLOCK_SKEW → STALE → future event; reason codes — union усіх застосовних, deterministic, без
+   duplicates; hard gate **не** переписує валідний trade-flow horizon на FAILED — overall gate і
+   per-horizon feature eligibility — різні факти):
+
+   | Умова | InterpretationQualityStatus | eligibleForTrading | Overall reasons |
+   |---|---|---|---|
+   | source `NO_DATA` | `NO_DATA` | false | `SOURCE_NO_DATA` (+ `NO_ELIGIBLE_HORIZONS`) |
+   | source `UNSAFE` | `BLOCKED` | false | `SOURCE_QUALITY_UNSAFE` |
+   | timing `CLOCK_SKEW` | `BLOCKED` | false | `SOURCE_CLOCK_SKEW` (+ `SOURCE_FUTURE_EVENT` при negative age) |
+   | timing `STALE` | `BLOCKED` | false | `FEATURE_SNAPSHOT_STALE` / `PROCESSING_LATENCY_EXCEEDED` |
+   | `futureEventDetected` і `policy.blockFutureEvents=true` | `BLOCKED` | false | `SOURCE_FUTURE_EVENT` |
+   | `futureEventDetected` і policy allow | щонайменше `DEGRADED` | за horizon-правилами | `SOURCE_FUTURE_EVENT` зберігається |
+   | source `OK`, усі horizons ELIGIBLE, timing FRESH | `OK` | true | — |
+   | source `OK`, частина horizons non-eligible | `DEGRADED` | true, якщо ≥1 ELIGIBLE | `HORIZONS_PARTIALLY_ELIGIBLE` |
+   | source `OK`, жодного ELIGIBLE | `DEGRADED` | false | `NO_ELIGIBLE_HORIZONS` |
+   | source `DEGRADED` (без hard gate) | `DEGRADED` | ≥1 ELIGIBLE ? true : false | `SOURCE_QUALITY_DEGRADED` + horizon summary |
+   | будь-яка failed feature group (без hard gate) | щонайменше `DEGRADED` | за horizon-правилами | `FEATURE_GROUP_FAILURE` |
+
+   «Є хоча б один ELIGIBLE horizon» означає лише, що engine може продовжити interpretation, — не що
+   opportunity буде створена; які horizons обов'язкові для pattern, вирішить OpportunityResolver.
+9. **Reason taxonomy** (`QualityReasonCodes`, мінімальна, typed `ReasonCode`): overall —
+   `SOURCE_QUALITY_DEGRADED`, `SOURCE_QUALITY_UNSAFE`, `SOURCE_NO_DATA`, `SOURCE_FUTURE_EVENT`,
+   `FEATURE_SNAPSHOT_STALE`, `PROCESSING_LATENCY_EXCEEDED`, `SOURCE_CLOCK_SKEW`,
+   `HORIZONS_PARTIALLY_ELIGIBLE`, `NO_ELIGIBLE_HORIZONS`, `FEATURE_GROUP_FAILURE`; per horizon —
+   `WINDOW_WARMING_UP`, `WINDOW_NOT_COMPUTED`, `TRADE_FLOW_GROUP_ABSENT`, `TRADE_FLOW_CALCULATOR_FAILED`,
+   `STALE_TRADES`, `TRADE_HISTORY_GAP`, `SOURCE_NO_DATA` (той самий словник, що й availability codes).
+10. **Fail-fast мінімум** (resolver працює після `MarketFeaturesSnapshotValidator`, structural
+    validation не дублює): snapshot, `quality`, `quality.status`, `evaluationTs`, `computedAt`,
+    `assessedAt`, policy — non-null. `QualityAssessment` enforce-ить: `eligibleForTrading=true` ⇒
+    ≥1 ELIGIBLE horizon, FRESH timing, source ∉ {UNSAFE, NO_DATA}; `OK` ⇒ усі ELIGIBLE, без failed
+    groups, без future event.
+
+Приклади partial eligibility: (а) warm-up 10 s після першого trade: `1S ELIGIBLE, 5S ELIGIBLE,
+15S WARMING_UP, 60S WARMING_UP` → `DEGRADED / eligible=true / [SOURCE_QUALITY_DEGRADED,
+HORIZONS_PARTIALLY_ELIGIBLE]`; (б) history gap у межах 15 s: `1S/5S ELIGIBLE, 15S/60S UNTRUSTED
+[TRADE_HISTORY_GAP]` → `DEGRADED / eligible=true`; (в) `bbo` + `short-term-regime` failed: усі чотири
+`ELIGIBLE`, `failedFeatureGroups=[bbo, short-term-regime]` → `DEGRADED / eligible=true /
+[SOURCE_QUALITY_DEGRADED, FEATURE_GROUP_FAILURE]`; (г) `UNSAFE` з усіма computed windows: horizons
+`ELIGIBLE`, але `BLOCKED / eligible=false / [SOURCE_QUALITY_UNSAFE]`.
+
+Тести: +57 (392 загалом, 0 failures): mapping table, NO_DATA vs UNTRUSTED, warm-up / gap partial
+eligibility, failed-group dependency, threshold boundaries (exactly / +1 ms), negative age / latency без
+clamp, skew over stale, policy matrix, futureEvent block/allow, immutability, determinism, reason
+dedup. Stage 1 availability і Stage 2 invariant tests без змін; golden files byte-for-byte unchanged;
+V1 engine/metrics/Kafka runtime не змінені (V2 resolvers ще не підключені до runtime path).
+
+**Не входить в Етап 3 (Етап 4+):** Flow/Momentum/Volatility/Book evaluators, directional scores,
+BULLISH/BEARISH, EvidenceStrength calculation, CrossHorizonInterpreter, MarketRegimeResolver,
+OpportunityResolver, runtime assembler `MarketInterpretationSnapshot` (жодних штучних snapshots з
+UNKNOWN directions / dummy BLOCKED opportunity), interpretation config hash wiring, V2 Avro mapper /
+publisher / topic, shadow mode, V1↔V2 projections, forecast/probability/confidence, costs/net edge,
+нові metrics, schema fingerprint tests, calibration thresholds, production policy values і Spring
+properties, live `assessedAt` wiring через Clock.
+
+**Milestone A:** закривається лише коли весь MFS v2 input compatibility (Етап 1) **та** quality /
+eligibility DoD (Етап 3) реально виконані й підключені до runtime path з production policy; на момент
+Етапу 3 quality/eligibility існує як pure domain layer без runtime wiring — Milestone A ще не
+оголошується завершеним.
 
 ## 16. Test strategy
 
