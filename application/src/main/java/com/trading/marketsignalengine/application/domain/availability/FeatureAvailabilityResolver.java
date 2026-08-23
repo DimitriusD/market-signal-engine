@@ -1,5 +1,6 @@
 package com.trading.marketsignalengine.application.domain.availability;
 
+import com.trading.marketsignalengine.application.domain.model.MarketHorizon;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureDiagnostics;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureQuality;
 import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
@@ -69,14 +70,14 @@ public final class FeatureAvailabilityResolver {
 
     public TradeFlowAvailability resolveTradeFlow(MarketFeaturesSnapshot snapshot) {
         Objects.requireNonNull(snapshot, "snapshot");
-        Map<FeatureWindowHorizon, FeatureWindowAvailability> result = new EnumMap<>(FeatureWindowHorizon.class);
-        for (FeatureWindowHorizon horizon : FeatureWindowHorizon.values()) {
+        Map<MarketHorizon, FeatureWindowAvailability> result = new EnumMap<>(MarketHorizon.class);
+        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
             result.put(horizon, resolveTradeFlow(snapshot, horizon));
         }
         return new TradeFlowAvailability(result);
     }
 
-    public FeatureWindowAvailability resolveTradeFlow(MarketFeaturesSnapshot snapshot, FeatureWindowHorizon horizon) {
+    public FeatureWindowAvailability resolveTradeFlow(MarketFeaturesSnapshot snapshot, MarketHorizon horizon) {
         Objects.requireNonNull(snapshot, "snapshot");
         Objects.requireNonNull(horizon, "horizon");
 
@@ -94,7 +95,7 @@ public final class FeatureAvailabilityResolver {
             return FeatureWindowAvailability.of(horizon, FeatureAvailabilityStatus.UNTRUSTED, CODE_STALE_TRADES);
         }
 
-        boolean computed = isComputed(horizon.tradeFlowWindowOf(tradeFlow), horizon);
+        boolean computed = isComputed(tradeFlowWindowOf(tradeFlow, horizon), horizon);
         boolean historyGap = quality != null && quality.qualityReasons().contains(REASON_TRADE_HISTORY_GAP);
         boolean warmingUp = quality != null && quality.warmingUp();
 
@@ -119,7 +120,7 @@ public final class FeatureAvailabilityResolver {
      * Whether the producer computed this window, per the presence markers described on the class.
      * Package-visible for tests.
      */
-    static boolean isComputed(TradeFlowWindow window, FeatureWindowHorizon horizon) {
+    static boolean isComputed(TradeFlowWindow window, MarketHorizon horizon) {
         if (window == null) {
             return false;
         }
@@ -133,7 +134,7 @@ public final class FeatureAvailabilityResolver {
                 || window.vwap() != null) {
             return true;
         }
-        if (horizon.nullableCounts()) {
+        if (hasNullableCounts(horizon)) {
             // null = not covered; any non-null counter (0 included) = measured window
             return window.tradeCount() != null
                     || window.validQtyTradeCount() != null
@@ -145,6 +146,36 @@ public final class FeatureAvailabilityResolver {
                 || positive(window.validQtyTradeCount())
                 || positive(window.aggressiveTradeCount())
                 || positive(window.unknownSideCount());
+    }
+
+    /**
+     * The trade-flow window of the given horizon, or {@code null} when the feature group is absent.
+     * Trade-flow-specific: which {@link TradeFlowFeature} accessor backs which {@link MarketHorizon}.
+     */
+    static TradeFlowWindow tradeFlowWindowOf(TradeFlowFeature tradeFlow, MarketHorizon horizon) {
+        Objects.requireNonNull(horizon, "horizon");
+        if (tradeFlow == null) {
+            return null;
+        }
+        return switch (horizon) {
+            case H1S -> tradeFlow.window1s();
+            case H5S -> tradeFlow.window5s();
+            case H15S -> tradeFlow.window15s();
+            case H60S -> tradeFlow.window60s();
+        };
+    }
+
+    /**
+     * Trade-flow wire contract per horizon: for {@code 1S}/{@code 5S} the counters are non-nullable Avro
+     * {@code int}s with schema default {@code 0} (a zero count cannot by itself prove the window was
+     * computed); for {@code 15S}/{@code 60S} they are {@code ["null","int"]} and {@code null} means
+     * "window not covered / not computed" while {@code 0} is a genuinely measured empty window.
+     */
+    static boolean hasNullableCounts(MarketHorizon horizon) {
+        return switch (Objects.requireNonNull(horizon, "horizon")) {
+            case H1S, H5S -> false;
+            case H15S, H60S -> true;
+        };
     }
 
     private static boolean positive(Integer value) {

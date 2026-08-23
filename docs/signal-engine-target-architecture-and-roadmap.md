@@ -1198,6 +1198,75 @@ schema, golden outputs, metrics — незмінні). Зроблено:
 Поза етапом (наступний етап — V2 domain model): MarketInterpretation domain, V2 mapper/topic,
 per-horizon assessments, cross-horizon interpretation, opportunity resolver.
 
+### Етап 2. V2 domain foundation — Market Interpretation domain model — ✅ реалізовано 2026-08-23
+
+Мета етапу — спроєктувати мову та інваріанти нового канонічного engine **без evaluation logic**:
+чиста, immutable, typed внутрішня domain model multi-horizon market interpretation, що відповідає
+V2 контракту `com.trading.contracts.signal.MarketInterpretationSnapshotEvent` (trading-schemas 1.1.0)
+і не залежить від Avro, Kafka, Spring, generated contract classes, infrastructure, `Clock` або
+`Instant.now()`. V1 лишається regression baseline: `mse-signals-v8`, thresholds, V1 output contract,
+golden outputs, Stage 1 Kafka semantics і metrics — незмінні.
+
+Зроблено (пакет `application/.../domain/interpretation`, плюс `domain/model/MarketHorizon`):
+
+1. **Один канонічний horizon type.** `MarketHorizon` (`H1S/H5S/H15S/H60S`, `wireValue()` `1S/5S/15S/60S`,
+   `duration()`, `canonicalOrder()` завжди `1S → 5S → 15S → 60S`, `fromWireValue` fail closed).
+   `FeatureWindowHorizon` видалено; `FeatureAvailabilityResolver` / `TradeFlowAvailability` /
+   `FeatureWindowAvailability` переведені на `MarketHorizon` механічно — trade-flow-specific вибір
+   window і nullability counters (`tradeFlowWindowOf`, `hasNullableCounts`) лишилися всередині
+   resolver; Stage 1 availability semantics не змінені (той самий тест-набір + 1 новий тест).
+2. **Typed vocabulary (окремо від V1 enums).** `InterpretationQualityStatus` (OK/DEGRADED/BLOCKED/
+   NO_DATA/UNKNOWN), `HorizonEligibilityStatus` (ELIGIBLE/WARMING_UP/UNAVAILABLE/UNTRUSTED/FAILED/UNKNOWN),
+   `InterpretationDirection` (BULLISH/BEARISH/NEUTRAL/MIXED/UNKNOWN), `EvidenceDimension`
+   (FLOW/MOMENTUM/VOLATILITY/BOOK), `EvidenceAvailabilityStatus`, `CrossHorizonAlignment`,
+   `OpportunityStatus`, `OpportunityType`, `OpportunitySide` (LONG/SHORT/NONE — не BUY/SELL),
+   `MarketRegime`. **Availability ≠ eligibility**: `FeatureAvailabilityStatus` — факт про input
+   window, `HorizonEligibilityStatus` — policy verdict про горизонт; AVAILABLE input не робить
+   горизонт ELIGIBLE сам по собі. **UNKNOWN ≠ NEUTRAL** скрізь.
+3. **Value objects.** `ReasonCode` (typed, non-blank, `UPPER_SNAKE_CASE`, value equality; колекції
+   reason codes immutable, без null, duplicates → fail-fast, insertion order); `EvidenceStrength`
+   (`BigDecimal` у `[0,1]`, без double/NaN, нормалізований deterministic `toPlainString`; absence =
+   відсутній об'єкт, ніколи не `0`; не probability і не confidence).
+4. **Lineage.** `FeatureLineage` (sourceFeatureEventId / SchemaVersion / SetVersion / ConfigHash /
+   sourceEvaluationAt / sourceComputedAt / sourceTriggerSource; non-blank, schema > 0, timestamps
+   positive; `evaluationAt ≤ computedAt` свідомо не вимагається — upstream чесно повідомляє
+   future-event/clock-skew) + pure `FeatureLineageFactory.from(MarketFeaturesSnapshot)` (lossless, без
+   Clock, не створює неповний lineage); `InterpretationLineage` (interpretationVersion,
+   interpretationConfigHash: non-blank, placeholder-значення відхиляються).
+5. **Assessment model з інваріантами у конструкторах/factories.** `InterpretationQuality`
+   (OK ⇒ eligible=true; BLOCKED/NO_DATA/UNKNOWN ⇒ false; DEGRADED — policy, модель не промотує в BLOCKED),
+   `HorizonEligibility`, `EvidenceAssessment` (non-AVAILABLE ⇒ direction UNKNOWN, strength absent),
+   `HorizonAssessment` (унікальні dimensions у canonical order; non-ELIGIBLE ⇒ UNKNOWN, без strength /
+   regime / AVAILABLE evidence; factories `eligible / notEligible / warmingUp / unavailable / untrusted /
+   failed / unknown`), `CrossHorizonAssessment` (таблиця alignment → direction; conflicting ⊆
+   participating, non-empty лише для CONFLICTING і proper subset; INSUFFICIENT_DATA/UNKNOWN ⇒ UNKNOWN без
+   strength/dominant; horizon lists unique + canonical order), `MarketOpportunity` (CANDIDATE ⇒ side
+   LONG/SHORT, real type, setupHorizon; NO_OPPORTUNITY/BLOCKED ⇒ side NONE, type NONE, без setupHorizon /
+   strength / invalidationCodes). Жодних order/quantity/stop/execution semantics.
+6. **Aggregate `MarketInterpretationSnapshot`** (builder-assembler, id не можна передати довільно;
+   canonical constructor re-derives id): identity non-blank; `validUntil > evaluatedAt`;
+   `evaluatedAt == featureLineage.sourceEvaluationAt`; рівно чотири assessments (missing/duplicate →
+   reject; будь-який input order → **stored canonical order 1S,5S,15S,60S**); participating /
+   conflicting / dominant / setupHorizon — лише ELIGIBLE horizons; quality ↔ opportunity:
+   `eligibleForTrading=false ⇔ opportunity BLOCKED`, CANDIDATE/NO_OPPORTUNITY/UNKNOWN ⇒ eligible=true.
+   Transport constants (`schemaVersion=2`, `eventType`, `sourceStream`) — не в domain (майбутній mapper).
+7. **Deterministic `InterpretationSnapshotIdGenerator`** (`mse-interpretation-id-v1`): RFC 4122 v3 UUID
+   над length-prefixed UTF-8 canonical key з `sourceFeatureEventId | schemaVersion | featureSetVersion |
+   configHash | sourceEvaluationAt(ms) | triggerSource | interpretationVersion | interpretationConfigHash`;
+   `validUntil`, wall clock, `sourceComputedAt` і результати не впливають; pinned fixture test.
+
+Тести: +51 (335 загалом, 0 failures): horizon/availability refactoring, lineage factory lossless,
+invariant matrices, duplicate/missing/unordered horizons, quality↔opportunity matrix, pinned id,
+immutability. Golden files byte-for-byte unchanged, V1 semantics/metrics без змін.
+
+**Не входить в Етап 2 (Етап 3+):** evaluators (Flow/Momentum/Volatility/Book), HorizonEligibilityResolver,
+QualityAssessmentResolver, CrossHorizonInterpreter, OpportunityResolver, реальні thresholds/weights,
+canonical config hashing/wiring `interpretationConfigHash`, V2 Avro mapper / publisher / topic / Spring
+wiring / shadow publishing, V1↔V2 projections, нові metrics, schema fingerprint test, forecast /
+probability / confidence, cost/edge model. V2 runtime path не публікує штучних UNKNOWN/BLOCKED
+snapshots, поки немає evaluators. **Milestone B не завершений**: domain model та invariants готові,
+evaluation logic, Avro output і Kafka publishing ще не реалізовані.
+
 ## 16. Test strategy
 
 ### Unit tests
@@ -1355,6 +1424,7 @@ Strategy consumer має отримувати не команду «BUY», а з
 - Поточний engine: [`DefaultMarketSignalEngine`](../application/src/main/java/com/trading/marketsignalengine/application/domain/service/DefaultMarketSignalEngine.java)
 - Поточний reducer: [`DirectionalReduction`](../application/src/main/java/com/trading/marketsignalengine/application/domain/service/DirectionalReduction.java)
 - Поточна aggregation: [`SignalAggregator`](../application/src/main/java/com/trading/marketsignalengine/application/domain/service/SignalAggregator.java)
+- V2 domain model (Етап 2): [`domain/interpretation`](../application/src/main/java/com/trading/marketsignalengine/application/domain/interpretation/package-info.java), канонічний horizon: [`MarketHorizon`](../application/src/main/java/com/trading/marketsignalengine/application/domain/model/MarketHorizon.java)
 - Поточний input mapper: [`MarketFeaturesSnapshotAvroMapper`](../infrastructure/event-adapter/src/main/java/com/trading/marketsignalengine/event/mapper/MarketFeaturesSnapshotAvroMapper.java)
 - Поточний output mapper: [`MarketSignalSnapshotAvroMapper`](../infrastructure/event-adapter/src/main/java/com/trading/marketsignalengine/event/mapper/MarketSignalSnapshotAvroMapper.java)
 - MFS v2 roadmap: [`mfs-v2-resolution.md`](../../market-feature-service/docs/mfs-v2-resolution.md)

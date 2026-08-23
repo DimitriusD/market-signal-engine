@@ -1,5 +1,6 @@
 package com.trading.marketsignalengine.application.domain.availability;
 
+import com.trading.marketsignalengine.application.domain.model.MarketHorizon;
 import java.util.List;
 import java.util.Objects;
 
@@ -8,7 +9,7 @@ import java.util.Objects;
  * codes explaining it. Immutable value.
  */
 public record FeatureWindowAvailability(
-        FeatureWindowHorizon horizon,
+        MarketHorizon horizon,
         FeatureAvailabilityStatus status,
         List<String> reasonCodes) {
 
@@ -18,7 +19,7 @@ public record FeatureWindowAvailability(
         reasonCodes = reasonCodes == null ? List.of() : List.copyOf(reasonCodes);
     }
 
-    public static FeatureWindowAvailability of(FeatureWindowHorizon horizon, FeatureAvailabilityStatus status,
+    public static FeatureWindowAvailability of(MarketHorizon horizon, FeatureAvailabilityStatus status,
                                                String... reasonCodes) {
         return new FeatureWindowAvailability(horizon, status, List.of(reasonCodes));
     }

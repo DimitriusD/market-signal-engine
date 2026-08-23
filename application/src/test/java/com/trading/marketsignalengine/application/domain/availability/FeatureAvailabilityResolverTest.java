@@ -5,15 +5,18 @@ import static com.trading.marketsignalengine.application.domain.availability.Fea
 import static com.trading.marketsignalengine.application.domain.availability.FeatureAvailabilityStatus.UNAVAILABLE;
 import static com.trading.marketsignalengine.application.domain.availability.FeatureAvailabilityStatus.UNTRUSTED;
 import static com.trading.marketsignalengine.application.domain.availability.FeatureAvailabilityStatus.WARMING_UP;
-import static com.trading.marketsignalengine.application.domain.availability.FeatureWindowHorizon.H15S;
-import static com.trading.marketsignalengine.application.domain.availability.FeatureWindowHorizon.H1S;
-import static com.trading.marketsignalengine.application.domain.availability.FeatureWindowHorizon.H5S;
-import static com.trading.marketsignalengine.application.domain.availability.FeatureWindowHorizon.H60S;
+import static com.trading.marketsignalengine.application.domain.model.MarketHorizon.H15S;
+import static com.trading.marketsignalengine.application.domain.model.MarketHorizon.H1S;
+import static com.trading.marketsignalengine.application.domain.model.MarketHorizon.H5S;
+import static com.trading.marketsignalengine.application.domain.model.MarketHorizon.H60S;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertSame;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import com.trading.marketsignalengine.application.domain.model.MarketHorizon;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureDiagnostics;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureQuality;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureQualityStatus;
@@ -43,8 +46,8 @@ class FeatureAvailabilityResolverTest {
         TradeFlowAvailability availability = resolver.resolveTradeFlow(snapshot(
                 tradeFlow(populated(9), populated(50), populated(150), populated(600))));
 
-        for (FeatureWindowHorizon horizon : FeatureWindowHorizon.values()) {
-            assertEquals(AVAILABLE, availability.statusOf(horizon), horizon.label());
+        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
+            assertEquals(AVAILABLE, availability.statusOf(horizon), horizon.wireValue());
             assertTrue(availability.isAvailable(horizon));
             assertEquals(List.of(FeatureAvailabilityResolver.CODE_WINDOW_COMPUTED),
                     availability.of(horizon).reasonCodes());
@@ -66,8 +69,8 @@ class FeatureAvailabilityResolverTest {
         TradeFlowAvailability availability = resolver.resolveTradeFlow(snapshot(
                 tradeFlow(coveredEmptyShort, coveredEmptyShort, coveredEmptyLong, coveredEmptyLong)));
 
-        for (FeatureWindowHorizon horizon : FeatureWindowHorizon.values()) {
-            assertEquals(AVAILABLE, availability.statusOf(horizon), horizon.label());
+        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
+            assertEquals(AVAILABLE, availability.statusOf(horizon), horizon.wireValue());
         }
     }
 
@@ -85,8 +88,8 @@ class FeatureAvailabilityResolverTest {
         TradeFlowAvailability availability = resolver.resolveTradeFlow(snapshot(
                 tradeFlow(zeroFlow, zeroFlow, zeroFlow, zeroFlow)));
 
-        for (FeatureWindowHorizon horizon : FeatureWindowHorizon.values()) {
-            assertEquals(AVAILABLE, availability.statusOf(horizon), horizon.label());
+        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
+            assertEquals(AVAILABLE, availability.statusOf(horizon), horizon.wireValue());
         }
     }
 
@@ -150,6 +153,27 @@ class FeatureAvailabilityResolverTest {
     }
 
     @Test
+    void tradeFlowWireContractPerHorizonStaysInsideTheResolver() {
+        // Stage 1 semantics kept after the MarketHorizon refactoring: 1S/5S counters are non-nullable
+        // on the wire, 15S/60S are nullable; the horizon → window selection is trade-flow-specific.
+        assertFalse(FeatureAvailabilityResolver.hasNullableCounts(H1S));
+        assertFalse(FeatureAvailabilityResolver.hasNullableCounts(H5S));
+        assertTrue(FeatureAvailabilityResolver.hasNullableCounts(H15S));
+        assertTrue(FeatureAvailabilityResolver.hasNullableCounts(H60S));
+
+        TradeFlowWindow w1 = populated(1);
+        TradeFlowWindow w5 = populated(5);
+        TradeFlowWindow w15 = populated(15);
+        TradeFlowWindow w60 = populated(60);
+        TradeFlowFeature tradeFlow = tradeFlow(w1, w5, w15, w60);
+        assertSame(w1, FeatureAvailabilityResolver.tradeFlowWindowOf(tradeFlow, H1S));
+        assertSame(w5, FeatureAvailabilityResolver.tradeFlowWindowOf(tradeFlow, H5S));
+        assertSame(w15, FeatureAvailabilityResolver.tradeFlowWindowOf(tradeFlow, H15S));
+        assertSame(w60, FeatureAvailabilityResolver.tradeFlowWindowOf(tradeFlow, H60S));
+        assertNull(FeatureAvailabilityResolver.tradeFlowWindowOf(null, H5S));
+    }
+
+    @Test
     void globalWarmUpKeepsCoveredShortWindowsAvailableWhileLongWindowsWarmUp() {
         // First trade 10s ago: 1S/5S are covered and computed, 15S/60S are not yet.
         TradeFlowAvailability availability = resolver.resolveTradeFlow(snapshot(
@@ -165,8 +189,8 @@ class FeatureAvailabilityResolverTest {
     void absentTradeFlowGroupIsUnavailableUnlessFailed() {
         TradeFlowAvailability availability = resolver.resolveTradeFlow(snapshot(null));
 
-        for (FeatureWindowHorizon horizon : FeatureWindowHorizon.values()) {
-            assertEquals(UNAVAILABLE, availability.statusOf(horizon), horizon.label());
+        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
+            assertEquals(UNAVAILABLE, availability.statusOf(horizon), horizon.wireValue());
             assertEquals(List.of(FeatureAvailabilityResolver.CODE_GROUP_ABSENT), availability.of(horizon).reasonCodes());
         }
     }
@@ -190,8 +214,8 @@ class FeatureAvailabilityResolverTest {
 
         TradeFlowAvailability availability = resolver.resolveTradeFlow(snapshot);
 
-        for (FeatureWindowHorizon horizon : FeatureWindowHorizon.values()) {
-            assertEquals(FAILED, availability.statusOf(horizon), "FAILED takes precedence on " + horizon.label());
+        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
+            assertEquals(FAILED, availability.statusOf(horizon), "FAILED takes precedence on " + horizon.wireValue());
             assertEquals(List.of(FeatureAvailabilityResolver.CODE_CALCULATOR_FAILED),
                     availability.of(horizon).reasonCodes());
         }
@@ -220,8 +244,8 @@ class FeatureAvailabilityResolverTest {
                         .qualityReasons(List.of("STALE_TRADES", "WARMING_UP"))
                         .build()));
 
-        for (FeatureWindowHorizon horizon : FeatureWindowHorizon.values()) {
-            assertEquals(UNTRUSTED, availability.statusOf(horizon), horizon.label());
+        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
+            assertEquals(UNTRUSTED, availability.statusOf(horizon), horizon.wireValue());
             assertEquals(List.of(FeatureAvailabilityResolver.CODE_STALE_TRADES), availability.of(horizon).reasonCodes());
         }
     }
@@ -256,8 +280,8 @@ class FeatureAvailabilityResolverTest {
                         .qualityReasons(List.of("BOOK_UNTRUSTED"))
                         .build()));
 
-        for (FeatureWindowHorizon horizon : FeatureWindowHorizon.values()) {
-            assertEquals(AVAILABLE, availability.statusOf(horizon), horizon.label());
+        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
+            assertEquals(AVAILABLE, availability.statusOf(horizon), horizon.wireValue());
         }
     }
 

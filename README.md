@@ -177,6 +177,22 @@ current V1 rules or golden outputs — it is the input foundation for the V2 mul
 - Global `warmingUp` does not make every horizon `WARMING_UP`: computed `1S`/`5S` stay `AVAILABLE`
   while `15S`/`60S` warm up. `sourceOrderBookTrusted` is book quality and never affects trade-flow.
 
+## Market Interpretation V2 domain model (Stage 2, no evaluators yet)
+
+`application/.../domain/interpretation` is the new canonical domain model of the engine — the internal
+counterpart of `com.trading.contracts.signal.MarketInterpretationSnapshotEvent` (trading-schemas 1.1.0).
+It is pure (no Avro/Kafka/Spring/`Clock`), immutable and typed, and **enforces the contract invariants
+in constructors / factories / the aggregate**: exactly one `HorizonAssessment` per `MarketHorizon`
+(`1S`, `5S`, `15S`, `60S`, stored in canonical order), `HorizonEligibility` (policy verdict) kept distinct
+from input `FeatureAvailabilityStatus`, UNKNOWN never read as NEUTRAL, `EvidenceStrength` as a
+`BigDecimal` in `[0,1]` (absence = absent, never `0`; not a probability), typed `ReasonCode`s,
+`CrossHorizonAssessment` / `MarketOpportunity` consistency tables (`eligibleForTrading=false ⇔
+opportunity BLOCKED`), full `FeatureLineage` + `InterpretationLineage`, and a deterministic
+`interpretationSnapshotId` (`InterpretationSnapshotIdGenerator`, `mse-interpretation-id-v1`, derived
+only from lineage). `MarketHorizon` is the single horizon type shared with the availability resolver.
+Evaluators, the V2 Avro mapper/publisher/topic and Spring wiring are **not** implemented yet; V1
+(`mse-signals-v8`) remains the runtime and regression baseline. Details: roadmap §15, "Етап 2".
+
 ## Failure behaviour, delivery semantics and metrics
 
 - **Delivery is at-least-once.** The input offset is committed only after the output is
