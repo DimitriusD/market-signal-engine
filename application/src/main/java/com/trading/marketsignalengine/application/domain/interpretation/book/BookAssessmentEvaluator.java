@@ -113,8 +113,8 @@ public final class BookAssessmentEvaluator {
         this(new SnapshotQualityConsistencyGuard());
     }
 
-    /** Package-private for tests; production uses the canonical guard. */
-    BookAssessmentEvaluator(SnapshotQualityConsistencyGuard consistencyGuard) {
+    /** Production uses the canonical guard; visible so a composing evaluator or test can share / instrument one. */
+    public BookAssessmentEvaluator(SnapshotQualityConsistencyGuard consistencyGuard) {
         this.consistencyGuard = requireNonNull(consistencyGuard, "consistencyGuard");
     }
 

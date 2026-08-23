@@ -1,0 +1,81 @@
+package com.trading.marketsignalengine.application.domain.interpretation.horizon;
+
+import static com.trading.marketsignalengine.application.domain.interpretation.Invariants.require;
+import static com.trading.marketsignalengine.application.domain.interpretation.Invariants.requireNonNull;
+
+import com.trading.marketsignalengine.application.domain.interpretation.HorizonAssessment;
+import com.trading.marketsignalengine.application.domain.model.MarketHorizon;
+import java.util.Collections;
+import java.util.EnumMap;
+import java.util.List;
+import java.util.Map;
+
+/**
+ * The typed result of {@link HorizonAssessmentEvaluator}: exactly one {@link HorizonAssessment} per
+ * {@link MarketHorizon}, always in canonical order ({@code 1S, 5S, 15S, 60S}). A missing horizon, a
+ * map entry beyond the four canonical keys (e.g. a {@code null} key) or an assessment filed under a
+ * key that does not match its own {@code horizon()} fails fast — nothing is silently dropped or
+ * relabelled; a duplicate cannot exist (the only ways to build one are a per-horizon map or the
+ * four-argument factory). Lookups never return {@code null}. Immutable; value equality, so two
+ * evaluations of the same input and policy compare equal.
+ */
+public final class HorizonAssessments {
+
+    private final Map<MarketHorizon, HorizonAssessment> byHorizon;
+
+    public HorizonAssessments(Map<MarketHorizon, HorizonAssessment> byHorizon) {
+        requireNonNull(byHorizon, "horizon assessments");
+        EnumMap<MarketHorizon, HorizonAssessment> copy = new EnumMap<>(MarketHorizon.class);
+        for (MarketHorizon horizon : MarketHorizon.canonicalOrder()) {
+            HorizonAssessment assessment = byHorizon.get(horizon);
+            require(assessment != null, "missing horizon assessment for horizon " + horizon);
+            require(assessment.horizon() == horizon,
+                    "assessment filed under " + horizon + " describes horizon " + assessment.horizon());
+            copy.put(horizon, assessment);
+        }
+        // fail fast instead of silently dropping anything beyond the four canonical keys (e.g. a null key)
+        require(byHorizon.size() == copy.size(),
+                "horizon assessments must contain exactly the four canonical horizons, got keys " + byHorizon.keySet());
+        this.byHorizon = Collections.unmodifiableMap(copy);
+    }
+
+    public static HorizonAssessments of(HorizonAssessment h1s, HorizonAssessment h5s,
+                                        HorizonAssessment h15s, HorizonAssessment h60s) {
+        EnumMap<MarketHorizon, HorizonAssessment> map = new EnumMap<>(MarketHorizon.class);
+        map.put(MarketHorizon.H1S, requireNonNull(h1s, "1S horizon assessment"));
+        map.put(MarketHorizon.H5S, requireNonNull(h5s, "5S horizon assessment"));
+        map.put(MarketHorizon.H15S, requireNonNull(h15s, "15S horizon assessment"));
+        map.put(MarketHorizon.H60S, requireNonNull(h60s, "60S horizon assessment"));
+        return new HorizonAssessments(map);
+    }
+
+    /** The assessment of {@code horizon}; never {@code null}. */
+    public HorizonAssessment of(MarketHorizon horizon) {
+        return byHorizon.get(requireNonNull(horizon, "horizon"));
+    }
+
+    /** Unmodifiable view in canonical horizon order. */
+    public Map<MarketHorizon, HorizonAssessment> asMap() {
+        return byHorizon;
+    }
+
+    /** Unmodifiable list in canonical horizon order ({@code 1S, 5S, 15S, 60S}). */
+    public List<HorizonAssessment> asList() {
+        return List.copyOf(byHorizon.values());
+    }
+
+    @Override
+    public boolean equals(Object o) {
+        return this == o || (o instanceof HorizonAssessments other && byHorizon.equals(other.byHorizon));
+    }
+
+    @Override
+    public int hashCode() {
+        return byHorizon.hashCode();
+    }
+
+    @Override
+    public String toString() {
+        return "HorizonAssessments" + byHorizon;
+    }
+}
