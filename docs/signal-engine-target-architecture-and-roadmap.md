@@ -1538,6 +1538,107 @@ dummy snapshots, UNKNOWN `CrossHorizonAssessment` чи штучної BLOCKED op
 V2 Kafka publisher/topic, Spring wiring, shadow mode, V1↔V2 projection, metrics, schema fingerprint
 tests, probability/confidence, forecast, cost/edge model, production threshold calibration.
 
+### Етап 5. Momentum, Volatility та Book Evidence — ✅ реалізовано 2026-08-24
+
+**Мета** (§11.3 Momentum, §11.4 Volatility, book evidence; Фаза 5): три нові незалежні evidence
+dimensions поверх Stage 3 quality/eligibility — за тим самим контуром, що й Flow (Етап 4): pure,
+deterministic, immutable, `BigDecimal`-only, без Spring/Kafka/Avro/Clock/metrics і без production
+defaults. Три коміти: `c1cbc27` (shared components + momentum), `48a0ca0` (volatility), `f4e3583`
+(book).
+
+**Shared components (винесені з `FlowAssessmentEvaluator`, semantics не змінена):**
+
+1. `SnapshotQualityConsistencyGuard` (`interpretation.quality`) — snapshot↔assessment
+   cross-check Етапу 4 (status, future-event flag, `evaluationTs`/`computedAt`, failed groups,
+   повні `horizonEligibilities`, повторно виведені через канонічний `HorizonEligibilityResolver`).
+   Використовується всіма чотирма evaluator-ами; рівно один раз на public `evaluate(...)`,
+   ніколи по разу на горизонт.
+2. `EvidenceEligibilityProjection` (`interpretation`) — єдиний mapping
+   `HorizonEligibilityStatus → EvidenceAvailabilityStatus` (`WARMING_UP`/`UNAVAILABLE → UNAVAILABLE`,
+   `UNTRUSTED → UNTRUSTED`, `FAILED → FAILED`, `UNKNOWN → UNKNOWN`; ELIGIBLE ніколи не project-иться):
+   direction `UNKNOWN`, strength відсутній, eligibility reasons verbatim. Eligibility має найвищий
+   пріоритет у кожному evaluator; non-eligible ніколи не стає NEUTRAL.
+
+**Momentum** (`interpretation.momentum`, dimension `MOMENTUM`):
+
+- Канонічний selector `priceChangeBpsOf`: `5S/15S/60S → RegimeFeature.priceChangeBps5s/15s/60s`;
+  `priceChangeBps1s` в MFS v2 не існує, тому eligible `1S` — explicit `UNAVAILABLE`
+  (`MOMENTUM_NOT_SCOPED_TO_HORIZON`) і **ніколи** не підміняється значенням 5S; selector для 1S
+  fail-fast. `MomentumAssessmentPolicy` тримає рівно три `MomentumHorizonPolicy` (H1S policy
+  відхиляється — жодних фіктивних policies).
+- Pipeline: eligibility → 1S not scoped → failed `short-term-regime` → `FAILED` → missing regime /
+  missing value → `UNAVAILABLE` → `abs(move) > maxSafeAbsMoveBps` → `UNTRUSTED` (boundary
+  приймається) → direction (inclusive thresholds, `bullish > 0`, `bearish < 0`); strength
+  `min(1, abs/fullStrengthAbsMoveBps)` (saturating, scale 6, `DOWN`), NEUTRAL — реальний `0`.
+- Scope V1: лише власний `priceChangeBps*s`; без VWAP/flow confirmation/divergence/absorption/
+  exhaustion/cross-horizon — це наступний interpretation layer.
+
+**Volatility** (`interpretation.volatility`, typed model):
+
+- Канонічний selector: всі чотири горизонти → `realizedVolatilityBps1s/5s/15s/60s` (deprecated alias
+  не читається). Policy — рівно чотири `VolatilityHorizonPolicy` з `0 ≤ low < normal < high`.
+- Volatility — regime, **не directional vote**: навіть AVAILABLE evidence має direction `UNKNOWN` і
+  strength `null`. Typed `VolatilityLevel` (`LOW/NORMAL/HIGH/EXTREME`; `UNKNOWN` лише для
+  non-available) у wrapper `VolatilityAssessment(evidence, level)` — level ніколи не парситься з
+  reason codes, generic `EvidenceAssessment` не змінювався.
+- Pipeline: eligibility → failed `short-term-regime` → `FAILED` → missing regime/value →
+  `UNAVAILABLE` → negative → `UNTRUSTED` → classification (inclusive upper bounds). `HIGH`/`EXTREME`
+  не блокують горизонт і не створюють NO_TRADE — контекст для майбутнього `MarketRegimeResolver`.
+
+**Book** (`interpretation.book`, dimension `BOOK`):
+
+- `BboFeature`/`BookFeature` — один миттєвий стан стакана, без rolling windows, тому реальна book
+  evidence лише на `1S`; eligible `5S/15S/60S` — `UNAVAILABLE` (`BOOK_NOT_SCOPED_TO_HORIZON`), 1S
+  reading не копіюється. Eligibility precedence вище not-scoped (non-eligible горизонт зберігає
+  projected status/reasons).
+- 1S pipeline: failed `bbo`/`order-book` → `FAILED` (обидва codes, коли обидва; до missing
+  features) → book-specific quality (`sourceOrderBookTrusted == false`, `syncStatus != IN_SYNC`,
+  `staleOrderBookState`, `incompleteBook`) → `UNTRUSTED` з усіма застосовними codes; `staleTrades`,
+  failed `trade-flow`/`short-term-regime` і non-book degradation — **не** book-specific faults →
+  invalid BBO geometry (непозитивні/crossed prices, negative spread/qty, microprice поза
+  `[bid, ask]`), `levelsUsed ≤ 0`, out-of-range `top1/top5`, implausible microprice offset →
+  `UNTRUSTED` → два індикатори: `top5Imbalance` (потребує `levelsUsed ≥ minimumLevelsUsed`;
+  insufficient depth → `BOOK_INSUFFICIENT_DEPTH`, індикатор відкидається) та `micropriceOffsetBps`
+  (saturating strength як у momentum). Комбінація: confirmation → слабший strength; conflict →
+  `MIXED` без strength (`BOOK_INDICATORS_CONFLICT`); directional + neutral → directional; один
+  usable індикатор → `BOOK_PARTIAL_EVIDENCE`; обидва відсутні → `UNAVAILABLE` (missing ≠ neutral).
+- Spread валідовано лише як geometry; `maxSpreadBps` у policy свідомо немає — spread не є
+  directional vote, це майбутній execution/liquidity gate. `top1Imbalance` range-checked, але не vote.
+
+**Horizon-to-feature mapping (канонічний, Етап 5):**
+
+| Horizon | Momentum | Volatility | Book |
+|---|---|---|---|
+| `H1S` | — (not scoped) | `realizedVolatilityBps1s` | `top5Imbalance` + `micropriceOffsetBps` |
+| `H5S` | `priceChangeBps5s` | `realizedVolatilityBps5s` | — (not scoped) |
+| `H15S` | `priceChangeBps15s` | `realizedVolatilityBps15s` | — (not scoped) |
+| `H60S` | `priceChangeBps60s` | `realizedVolatilityBps60s` | — (not scoped) |
+
+Контейнери `MomentumAssessments` / `VolatilityAssessments` / `BookAssessments` повторюють structural
+guarantees `FlowAssessments`: рівно чотири canonical horizons, missing/extra/null key і wrong
+dimension → fail-fast, immutable views, value equality. Побічна зміна: `BboFeature` отримав
+`@Builder(toBuilder = true)` (адитивно, як в інших feature records; поведінка без змін).
+
+Тести: +169 (675 загалом, 0 failures, 0 skipped): shared guard + projection + guard-once у кожному
+evaluator; momentum (exact mapping, 1S not-scoped і не-підміна 5S, boundaries `−ε/exact/+ε`,
+saturation, max-safe boundary, failed/missing, non-eligible, policy invariants, container);
+volatility (правильне поле на кожному горизонті, LOW/NORMAL/HIGH/EXTREME boundaries, zero → LOW,
+negative → UNTRUSTED, direction завжди UNKNOWN / strength завжди null, non-available → level
+UNKNOWN, wrapper invariants, policy ordering, container); book (confirmed/conflict/partial/missing
+матриця, depth semantics, BBO geometry, book-specific quality, staleTrades не book-fault, wide valid
+spread не змінює direction, eligibility precedence над not-scoped, container). Flow semantics після
+refactoring не змінилася — всі наявні Flow tests проходять без модифікації expectations.
+
+**Runtime isolation:** V1 `StandardSignalEngine`, Kafka input/output, metrics, golden outputs,
+schemas — без змін; нові evaluator-и — pure domain layer без Spring wiring.
+
+**Не входить в Етап 5 (Етап 6+):** `HorizonAssessment` aggregation, `CrossHorizonInterpreter`,
+Flow/Momentum confirmation і flow-price divergence, `MarketRegimeResolver`, `OpportunityResolver`,
+фінальні LONG/SHORT/NO_TRADE, V2 Avro mapper/publisher/topic, runtime assembler, Spring wiring,
+shadow mode, metrics, replay loader, production threshold calibration. **Milestone B не
+завершений**: всі чотири evidence dimensions готові, але horizon aggregation і cross-horizon
+interpretation ще не реалізовані.
+
 ## 16. Test strategy
 
 ### Unit tests

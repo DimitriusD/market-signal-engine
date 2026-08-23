@@ -235,13 +235,14 @@ goldens, metrics and Kafka runtime are unchanged. Details: roadmap §15, "Ета
 and an explicit, versioned `FlowAssessmentPolicy` into `FlowAssessments` — exactly one `FLOW`
 `EvidenceAssessment` per `MarketHorizon` (`1S, 5S, 15S, 60S`, canonical order, fail-fast lookup,
 immutable, value equality; extra map entries rejected). Pure and deterministic (no
-Spring/Kafka/Avro/`Clock`/metrics): same input + policy ⇒ value-equal result. The evaluator
+Spring/Kafka/Avro/`Clock`/metrics): same input + policy ⇒ value-equal result. The shared
+`SnapshotQualityConsistencyGuard` (in `interpretation.quality`, used by **every** evidence evaluator)
 cross-checks that the `QualityAssessment` was produced from the given snapshot — source status,
 future-event flag, `evaluationTs`/`computedAt`, failed feature groups, and the full per-horizon
 eligibilities re-derived through the canonical `HorizonEligibilityResolver` (a pure dependency; the
 eligibility rules are never duplicated) — and fails fast on a mismatched pair, which also separates
 two same-status DEGRADED snapshots whose degradation differs (incomplete book vs stale trades). The
-guard runs exactly once per `evaluate(...)` call, before any flow value is read. This is not full
+guard runs exactly once per `evaluate(...)` call, before any feature value is read. This is not full
 lineage binding: full identity binding via `sourceFeatureEventId` comes with the runtime assembler.
 The output is heuristic **evidence** — not a probability, not a confidence, not BUY/SELL, not an
 opportunity.
@@ -252,7 +253,8 @@ opportunity.
   `minTradeCount > 0`, `minAggressiveTradeCount ≥ 0`, `maxUnknownSideRatio ∈ [0,1]`. Missing / duplicate
   horizon fails fast. Thresholds are not calibrated; tests use an explicit fixture policy.
 - **Eligibility first.** A horizon that Stage 3 did not mark `ELIGIBLE` is projected without reading any
-  feature value — `WARMING_UP`/`UNAVAILABLE → UNAVAILABLE`, `UNTRUSTED → UNTRUSTED`, `FAILED → FAILED`,
+  feature value through the shared `EvidenceEligibilityProjection` (used by every evidence evaluator) —
+  `WARMING_UP`/`UNAVAILABLE → UNAVAILABLE`, `UNTRUSTED → UNTRUSTED`, `FAILED → FAILED`,
   `UNKNOWN → UNKNOWN` — with direction `UNKNOWN`, no strength and the eligibility reasons kept verbatim.
 - **Per eligible horizon** (window chosen by the single canonical `TradeFlowFeature.window(horizon)`):
   missing window / `signedFlowImbalance` / activity counts → `UNAVAILABLE` (`FLOW_WINDOW_MISSING`,
@@ -269,9 +271,57 @@ opportunity.
   `totalAggressiveVolume`, `signedTradeFlow`, `avgTradeSize`, `vwap` are deliberately not gates or weights
   in Flow V1.
 
-Momentum/Volatility/Book evaluators, the cross-horizon interpreter, opportunity resolution, the V2 runtime
-path and production policy values are not implemented yet; V1 (`mse-signals-v8`) goldens, metrics and
-Kafka runtime are unchanged. Details: roadmap §15, "Етап 4".
+Details: roadmap §15, "Етап 4".
+
+## Momentum, volatility and book evidence (Stage 5, pure, not yet wired)
+
+`interpretation/momentum`, `interpretation/volatility` and `interpretation/book` add the remaining three
+independent evidence dimensions, following the same shape as Flow: pure, deterministic evaluators
+(no Spring/Kafka/Avro/`Clock`/metrics, `BigDecimal` only), an explicit versioned policy with no
+production defaults, the shared `SnapshotQualityConsistencyGuard` (exactly once per `evaluate(...)`)
+and the shared `EvidenceEligibilityProjection` (eligibility has the highest precedence in every
+evaluator; non-eligible horizons keep their eligibility reasons verbatim and never become NEUTRAL).
+All three produce strict, immutable four-horizon containers with value equality.
+
+- **Momentum** (`MomentumAssessmentEvaluator` → `MomentumAssessments`, dimension `MOMENTUM`): one
+  canonical selector maps `5S/15S/60S → RegimeFeature.priceChangeBps5s/15s/60s`; MFS v2 publishes no
+  1S price change, so an eligible `1S` is explicitly `UNAVAILABLE` (`MOMENTUM_NOT_SCOPED_TO_HORIZON`)
+  and is **never** substituted with the 5S value (the policy holds exactly three horizon policies —
+  no 1S fiction). Failed `short-term-regime` → `FAILED`; missing regime/value → `UNAVAILABLE`;
+  `abs(move) > maxSafeAbsMoveBps` → `UNTRUSTED` (the boundary itself is trusted). Direction thresholds
+  are inclusive (`bullish > 0`, `bearish < 0`); strength = `min(1, abs(move)/fullStrengthAbsMoveBps)`
+  (saturating, deterministic scale-6 `DOWN` division), NEUTRAL carries a real `0`. Momentum V1 reads
+  only the horizon's own `priceChangeBps*s` — no VWAP, flow confirmation/divergence, or cross-horizon
+  values (next interpretation layer).
+- **Volatility** (`VolatilityAssessmentEvaluator` → `VolatilityAssessments` of typed
+  `VolatilityAssessment`): one canonical selector maps all four horizons to
+  `RegimeFeature.realizedVolatilityBps1s/5s/15s/60s` (the deprecated alias is never read). Volatility
+  is a regime, **not a directional vote**: even AVAILABLE evidence reads direction `UNKNOWN` with no
+  strength, and the typed `VolatilityLevel` (`LOW/NORMAL/HIGH/EXTREME`, inclusive upper bounds
+  `0 ≤ low < normal < high`; `UNKNOWN` for non-available evidence) is a model value, never parsed from
+  reason codes. Negative values → `UNTRUSTED`; `HIGH`/`EXTREME` neither block a horizon nor create a
+  NO_TRADE here — context for the future regime/opportunity layer.
+- **Book** (`BookAssessmentEvaluator` → `BookAssessments`, dimension `BOOK`): `BboFeature`/`BookFeature`
+  are one **instantaneous** book snapshot, so only `1S` carries real book evidence; eligible
+  `5S/15S/60S` are `UNAVAILABLE` (`BOOK_NOT_SCOPED_TO_HORIZON`) and the 1S reading is never copied
+  out. For 1S: failed `bbo`/`order-book` groups → `FAILED` (both codes when both, checked before
+  missing features); book-specific quality (`sourceOrderBookTrusted == false`, `syncStatus !=
+  IN_SYNC`, `staleOrderBookState`, `incompleteBook`) → `UNTRUSTED` with all applicable codes —
+  `staleTrades`, failed `trade-flow`/`short-term-regime` and non-book degradation are deliberately not
+  book-specific faults; structurally invalid BBO geometry (non-positive/crossed prices, negative
+  spread/quantity, microprice outside `[bid, ask]`), `levelsUsed ≤ 0`, out-of-range `top1/top5`
+  imbalance or an implausible microprice offset → `UNTRUSTED`. Two indicators only —
+  `BookFeature.top5Imbalance` (needs `levelsUsed ≥ minimumLevelsUsed`; insufficient depth drops it
+  with `BOOK_INSUFFICIENT_DEPTH`) and `BboFeature.micropriceOffsetBps` (saturating strength like
+  momentum): confirmation takes the weaker strength, conflict → `MIXED` with no strength, directional
+  + neutral → the directional one, a single usable indicator → `BOOK_PARTIAL_EVIDENCE`, both missing →
+  `UNAVAILABLE` (never neutral). Spread is validated as geometry but is **never** a directional vote
+  and the policy has no `maxSpreadBps` — spread acceptance is a later execution/liquidity gate.
+
+Flow/Momentum confirmation and divergence, `HorizonAssessment` aggregation, the cross-horizon
+interpreter, `MarketRegimeResolver`, opportunity resolution, the V2 runtime path and production policy
+values are not implemented yet; V1 (`mse-signals-v8`) goldens, metrics and Kafka runtime are
+unchanged. Details: roadmap §15, "Етап 5".
 
 ## Failure behaviour, delivery semantics and metrics
 
