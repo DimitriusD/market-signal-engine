@@ -2016,6 +2016,79 @@ cost, replay calibration, adaptive decay, canonical config hashing, metrics, sch
 explanation text, outcome capture. Engine ще **не** готовий до paper trading — потрібні V2 mapper і
 publisher.
 
+### Етап 10. Повний runtime cutover на MarketInterpretationSnapshotEvent — ✅ реалізовано 2026-08-24
+
+**Мета:** атомарний cutover live runtime на V2 multi-horizon контракт без паралельного V1/V2,
+feature flag чи shadow publishing. Єдиний активний шлях:
+`MarketFeaturesSnapshotEvent → MarketFeaturesSnapshotAvroMapper → MarketFeaturesSnapshotValidator →
+QualityAssessmentResolver → MarketInterpretationSnapshotAssembler → MarketInterpretationSnapshot →
+MarketInterpretationSnapshotAvroMapper → MarketInterpretationSnapshotEvent → існуючий topic`.
+Topic property `app.kafka.topic.market-signals` (env `APP_KAFKA_TOPIC_MARKET_SIGNALS`, default
+`state.market.signals.v1`) не змінено; окремого V2 topic/publisher/port/listener немає.
+
+**Application runtime:** `ValidatedMarketInterpretationEvaluator` — один validated крок
+(validate → quality(assessedAt) → assemble), без wall clock/Kafka, спільний для live і replay
+(`InterpretationReplayHarness`, приймає explicit snapshot + assessedAt, не публікує, не читає
+годинник; live/replay parity = value-equality включно з id). Live handler —
+`MarketInterpretationHandleService` за існуючим `MarketFeaturesHandler`: `receivedAt =
+clock.instant()` (одночасно explicit quality `assessedAt`) → evaluate → `processedAt` → publish;
+жоден exception не ковтається (validation → DLT, publish → bounded retry → DLT).
+`MarketInterpretationPublication(snapshot, receivedAt, processedAt)` — immutable transport-конверт
+(processedAt ≥ receivedAt, валідні epoch instants), бо domain snapshot навмисно не несе transport
+timestamps, а `MetadataEvent` вимагає receivedTs/processedTs; він не впливає на snapshot та id;
+`evaluatedAt` завжди source market tick.
+
+**V2 mapper** (`MarketInterpretationSnapshotAvroMapper`, pure, lossless): metadata
+`schemaVersion=2` / `MARKET_INTERPRETATION_SNAPSHOT` / `market-signal-engine`, `eventId =
+interpretationSnapshotId`, `exchangeTs = evaluatedTs` (= source tick), receivedTs/processedTs — із
+publication; horizons — wire values `1S/5S/15S/60S` у canonical порядку (ніколи enum name);
+таксономії — `enum.name()`; strengths — `toPlainString()` з чесним `null` (ніколи "0"); reason/
+invalidation codes і обидва lineage — verbatim; LONG/SHORT та NO_OPPORTUNITY/BLOCKED публікуються
+as-is (interpretation, не BUY/SELL/NO_TRADE); required-відсутність → `AvroMappingException`, без
+fallback "", 0, UNKNOWN. Avro binary round-trip покритий тестом.
+
+**Kafka publisher** (`MarketInterpretationSnapshotPublisher`): збережена bounded delivery —
+broker-ack wait, `request.timeout.ms < delivery.timeout.ms < publishTimeout`, timeout → cancel +
+`SignalPublishException`, unwrap ExecutionException, restore interrupt, retry/DLT, at-least-once з
+downstream dedup за deterministic `interpretationSnapshotId`; key = domain-required `instrumentId`
+(fallback exchange:symbol більше не потрібен); логи несуть interpretationSnapshotId,
+sourceFeatureEventId, quality status, opportunity status/type/side, validUntil. Нові metrics не
+додані; V1 metrics port/adapter видалені, `DeadLetterMetrics` збережено.
+
+**Runtime configuration** (`app.interpretation.*`, constructor-bound immutable records): explicit
+quality thresholds, per-horizon flow/momentum/volatility, book, versioned horizon/cross/opportunity
+(включно з explicit `allow-volatile-momentum-continuation`) і horizon-aware validity для
+1S/5S/15S/60S; жодних прихованих defaults у domain evaluator-ах, missing/invalid значення ламає
+startup (включно з захистом від literal нерозв'язаного `${...}` placeholder-а).
+`app.interpretation.config-hash` (`APP_INTERPRETATION_CONFIG_HASH`) **без default** — deployment
+зобов'язаний надати real hash, який покриває всі interpretation policies (canonical hashing —
+окремий пізніший етап; ніколи `hashCode()`/serialization).
+
+**Видалений V1 runtime:** handler/evaluator/engine/rules/aggregation/setup/validity, V1-only domain
+models (MarketSignalSnapshot, MarketSignal, MarketSetup, MarketBias, RiskLevel, SignalConfiguration,
+SignalValidity, ...), V1 output port + metrics port/adapter, V1 Avro mapper/publisher,
+SignalProperties, V1 unit/golden/publisher/integration тести. Спільні компоненти без змін:
+input mapper/validator, `MarketFeaturesSnapshot`, `MarketHorizon`, `SyncStatus`, retry/DLT,
+`PublishTimeoutHierarchy`. Код більше не імпортує `MarketSignalSnapshotEvent` /
+`MarketSignalSnapshot` / `MarketSignalSnapshotPublisherPort`; generated V1 class фізично лишається
+в trading-schemas і не змінюється.
+
+**Schema Registry cutover — deployment precondition:** новий контракт свідомо несумісний із V1, а
+topic той самий, тож subject `state.market.signals.v1-value` перед деплоєм вимагає операційної зміни
+compatibility або окремої процедури реєстрації V2 schema. У коді це не приховується і не
+обходиться; subject naming strategy не змінювалась; schema fingerprint test — поза scope.
+
+Тести: **730 загалом, 0 failures, 0 errors, 0 skipped** (видалені V1-тести, додані: mapper exact
+mapping + round-trip, publisher V1-сценарії на V2 порту, application evaluator/handler/publication/
+replay-parity, Spring context/startup validation з invalid interpretation config, embedded-Kafka e2e
+`MarketFeaturesSnapshotEvent → MarketInterpretationSnapshotEvent` з nested V2 полями/lineage/
+opportunity, UNSAFE→BLOCKED публікацією, deterministic id на duplicate, validation→DLT і
+publish-failure→bounded retry→DLT без output до broker ack).
+
+**Поза scope (без змін):** BUY/SELL/order/position/execution, expected return/probability,
+fees/edge, replay calibration, adaptive thresholds, outcome capture, нові metrics, schema
+fingerprint, другий topic, паралельна V1/V2 стратегія.
+
 ## 16. Test strategy
 
 ### Unit tests
