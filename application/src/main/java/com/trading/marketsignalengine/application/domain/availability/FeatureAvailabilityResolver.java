@@ -13,9 +13,9 @@ import java.util.Objects;
 /**
  * Pure, deterministic input-side resolver of rolling-window availability for the trade-flow feature
  * group (1S / 5S / 15S / 60S). It formalises what "the window is there" means on the MFS v2 wire so
- * that later multi-horizon logic never confuses {@code null} with zero, warm-up with no-data, or a
- * failed calculator with a neutral value. It does <b>not</b> influence the current V1 rules or golden
- * outputs; it is the input-normalisation foundation for the V2 domain stage.
+ * that the multi-horizon logic never confuses {@code null} with zero, warm-up with no-data, or a
+ * failed calculator with a neutral value. It is the input-normalisation foundation of the V2
+ * quality/eligibility layer ({@code HorizonEligibilityResolver} builds directly on it).
  *
  * <h2>Presence markers (what proves a window was computed)</h2>
  * A window is <em>computed</em> when any nullable computed metric is non-null

@@ -133,7 +133,12 @@ infrastructure/event-adapter
 
 Гексагональну межу слід зберегти: domain/application не повинні залежати від Spring, Kafka або Avro.
 
-### 4.3. Поточний runtime pipeline
+### 4.3. Runtime pipeline на момент аналізу (V1 — історичний)
+
+> Розділи 4.3–4.5 описують V1 runtime станом на аналіз 2026-08-08. Увесь V1 шлях (rules, reduction,
+> aggregation, setup/validity, V1 mapper/publisher) **повністю видалений в Етапі 10**; актуальний
+> V2 pipeline — див. Етап 10 та §22 «Внутрішні джерела». Текст збережено як обґрунтування
+> архітектурних рішень V2.
 
 ```text
 MarketFeaturesSnapshotEvent
@@ -150,7 +155,7 @@ MarketFeaturesSnapshotEvent
 → synchronous Kafka publish
 ```
 
-Ключова реалізація: [`DefaultMarketSignalEngine`](../application/src/main/java/com/trading/marketsignalengine/application/domain/service/DefaultMarketSignalEngine.java).
+Ключова реалізація: `DefaultMarketSignalEngine` (видалений в Етапі 10).
 
 ### 4.4. Що вже реалізовано добре
 
@@ -222,7 +227,7 @@ sourceFeatureSnapshotId | signalSetVersion
 
 #### Discrete directional reduction
 
-[`DirectionalReduction`](../application/src/main/java/com/trading/marketsignalengine/application/domain/service/DirectionalReduction.java) використовує:
+`DirectionalReduction` (видалений в Етапі 10) використовував:
 
 ```text
 BUY_PRESSURE        +0.25
@@ -258,7 +263,7 @@ Threshold directional bias дорівнює `±0.35`. Тому один base sig
 
 #### Publisher blocking
 
-[`MarketSignalSnapshotPublisher`](../infrastructure/event-adapter/src/main/java/com/trading/marketsignalengine/event/publisher/MarketSignalSnapshotPublisher.java) виконує:
+`MarketSignalSnapshotPublisher` (видалений в Етапі 10; V2-наступник — `MarketInterpretationSnapshotPublisher` з bounded publish timeout) виконував:
 
 ```java
 kafkaTemplate.send(topic, key, event).join();
@@ -2232,7 +2237,7 @@ MarketFeatureSnapshot
 → cross-horizon interpretation
 → calibrated forecasts
 → cost-aware market opportunities
-→ explainable deterministic MarketSignalSnapshotV2
+→ explainable deterministic MarketInterpretationSnapshot
 ```
 
 Strategy consumer має отримувати не команду «BUY», а зміст на кшталт:
@@ -2243,15 +2248,16 @@ Strategy consumer має отримувати не команду «BUY», а з
 
 ## 22. Внутрішні джерела
 
-- Поточний engine: [`DefaultMarketSignalEngine`](../application/src/main/java/com/trading/marketsignalengine/application/domain/service/DefaultMarketSignalEngine.java)
-- Поточний reducer: [`DirectionalReduction`](../application/src/main/java/com/trading/marketsignalengine/application/domain/service/DirectionalReduction.java)
-- Поточна aggregation: [`SignalAggregator`](../application/src/main/java/com/trading/marketsignalengine/application/domain/service/SignalAggregator.java)
-- V2 domain model (Етап 2): [`domain/interpretation`](../application/src/main/java/com/trading/marketsignalengine/application/domain/interpretation/package-info.java), канонічний horizon: [`MarketHorizon`](../application/src/main/java/com/trading/marketsignalengine/application/domain/model/MarketHorizon.java)
+- Domain model V2: [`domain/interpretation`](../application/src/main/java/com/trading/marketsignalengine/application/domain/interpretation/package-info.java), канонічний horizon: [`MarketHorizon`](../application/src/main/java/com/trading/marketsignalengine/application/domain/model/MarketHorizon.java)
+- Snapshot assembler (Етап 9): [`MarketInterpretationSnapshotAssembler`](../application/src/main/java/com/trading/marketsignalengine/application/domain/interpretation/assembly/MarketInterpretationSnapshotAssembler.java)
+- Runtime evaluator live/replay (Етап 10): [`ValidatedMarketInterpretationEvaluator`](../application/src/main/java/com/trading/marketsignalengine/application/service/ValidatedMarketInterpretationEvaluator.java), [`InterpretationReplayHarness`](../application/src/main/java/com/trading/marketsignalengine/application/replay/InterpretationReplayHarness.java)
+- Live handler: [`MarketInterpretationHandleService`](../application/src/main/java/com/trading/marketsignalengine/application/service/MarketInterpretationHandleService.java)
 - Поточний input mapper: [`MarketFeaturesSnapshotAvroMapper`](../infrastructure/event-adapter/src/main/java/com/trading/marketsignalengine/event/mapper/MarketFeaturesSnapshotAvroMapper.java)
-- Поточний output mapper: [`MarketSignalSnapshotAvroMapper`](../infrastructure/event-adapter/src/main/java/com/trading/marketsignalengine/event/mapper/MarketSignalSnapshotAvroMapper.java)
+- Поточний output mapper: [`MarketInterpretationSnapshotAvroMapper`](../infrastructure/event-adapter/src/main/java/com/trading/marketsignalengine/event/mapper/MarketInterpretationSnapshotAvroMapper.java)
+- Поточний Kafka publisher: [`MarketInterpretationSnapshotPublisher`](../infrastructure/event-adapter/src/main/java/com/trading/marketsignalengine/event/publisher/MarketInterpretationSnapshotPublisher.java)
 - MFS v2 roadmap: [`mfs-v2-resolution.md`](../../market-feature-service/docs/mfs-v2-resolution.md)
 - Актуальна feature schema: [`MarketFeaturesSnapshotEvent.avsc`](../../trading-schemas/src/main/avro/com/trading/contracts/feature/snapshot/MarketFeaturesSnapshotEvent.avsc)
-- Актуальна signal schema: [`MarketSignalSnapshotEvent.avsc`](../../trading-schemas/src/main/avro/com/trading/contracts/signal/snapshot/MarketSignalSnapshotEvent.avsc)
+- Актуальна output schema: [`MarketInterpretationSnapshotEvent.avsc`](../../trading-schemas/src/main/avro/com/trading/contracts/signal/snapshot/MarketInterpretationSnapshotEvent.avsc)
 
 ## 23. Дослідницькі орієнтири
 
