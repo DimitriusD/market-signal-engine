@@ -16,7 +16,7 @@ spring:
     producer:
       key-serializer: org.apache.kafka.common.serialization.StringSerializer
       # acks=all and enable.idempotence=true are also forced in code (KafkaConfiguration) so no
-      # profile can weaken output durability.
+      # profile can silently weaken output durability.
       acks: ${APP_KAFKA_PRODUCER_ACKS:all}
       properties:
         enable.idempotence: true
@@ -40,10 +40,15 @@ app:
       url: ${APP_SCHEMA_REGISTRY_URL:http://localhost:8081}
     topic:
       market-features: ${APP_KAFKA_TOPIC_MARKET_FEATURES:market.feature.snapshot.v1}
+      # The output topic keeps its V1 name; the payload contract is now the V2
+      # MarketInterpretationSnapshotEvent, which is NOT reader-compatible with the V1
+      # MarketSignalSnapshotEvent. Deployment precondition: the Schema Registry subject
+      # state.market.signals.v1-value requires an operational compatibility change or an explicit
+      # V2 schema registration procedure before this build goes live (see roadmap, Етап 10).
       market-signals: ${APP_KAFKA_TOPIC_MARKET_SIGNALS:state.market.signals.v1}
     # Max time the consumer thread waits for the output broker ack. Must be > delivery.timeout.ms
     # (validated at startup). On timeout the wait is abandoned (the producer may still deliver — at
-    # least once, dedup downstream on signalSnapshotId) and the input goes through retry -> DLT.
+    # least once, dedup downstream on interpretationSnapshotId) and the input goes through retry -> DLT.
     publish-timeout-ms: ${APP_KAFKA_PUBLISH_TIMEOUT_MS:6500}
     retry:
       backoff-ms: ${APP_KAFKA_RETRY_BACKOFF_MS:1000}
@@ -51,20 +56,69 @@ app:
       # 4 deliveries (4 publisher attempts) before the input record is dead-lettered.
       max-attempts: ${APP_KAFKA_RETRY_MAX_ATTEMPTS:3}
 
-  signal:
-    signal-set-version: ${APP_SIGNAL_SET_VERSION:mse-signals-v8}
-    max-spread-bps: ${APP_SIGNAL_MAX_SPREAD_BPS:2.0}
-    buy-flow-imbalance-5s-threshold: ${APP_SIGNAL_BUY_FLOW_IMBALANCE_5S_THRESHOLD:0.15}
-    sell-flow-imbalance-5s-threshold: ${APP_SIGNAL_SELL_FLOW_IMBALANCE_5S_THRESHOLD:-0.15}
-    min-trade-count-5s-for-trade-flow-signal: ${APP_SIGNAL_MIN_TRADE_COUNT_5S_FOR_TRADE_FLOW_SIGNAL:10}
-    buy-book-imbalance-threshold: ${APP_SIGNAL_BUY_BOOK_IMBALANCE_THRESHOLD:0.60}
-    sell-book-imbalance-threshold: ${APP_SIGNAL_SELL_BOOK_IMBALANCE_THRESHOLD:-0.60}
-    # Uncalibrated placeholder (log-return bps, MFS v2 units): blocks only extreme 1s regimes.
-    # Calibrated value comes from the first replay pass — see docs/path-to-paper-trading.md §8.2.
-    max-realized-volatility-bps-1s: ${APP_SIGNAL_MAX_REALIZED_VOLATILITY_BPS_1S:50.0}
-    microstructure-setup-ttl-ms: ${APP_SIGNAL_MICROSTRUCTURE_SETUP_TTL_MS:2000}
-    risk-off-ttl-ms: ${APP_SIGNAL_RISK_OFF_TTL_MS:5000}
-    neutral-ttl-ms: ${APP_SIGNAL_NEUTRAL_TTL_MS:1000}
+  # V2 multi-horizon interpretation configuration. Every value is explicit — the domain evaluators
+  # carry no defaults; a missing value fails startup. Numeric thresholds are uncalibrated heuristic
+  # placeholders (calibration is a later replay-driven stage). Horizon map keys are the contract
+  # wire values 1S/5S/15S/60S.
+  interpretation:
+    version: ${APP_INTERPRETATION_VERSION:mse-interpretation-v1}
+    # The interpretationConfigHash of the published lineage. Deliberately NO default: the deployment
+    # must provide a real hash covering the full interpretation configuration below (quality, flow,
+    # momentum, volatility, book, horizon, cross-horizon, opportunity, validity). The engine never
+    # fabricates one.
+    config-hash: ${APP_INTERPRETATION_CONFIG_HASH}
     # Comma-separated allowlist of upstream featureSetVersion values. MFS v2 publishes
-    # "mfs-features-v2" by default; any other version fails closed to the DLT (fail-fast, no guessing).
-    supported-feature-set-versions: ${APP_SIGNAL_SUPPORTED_FEATURE_SET_VERSIONS:mfs-features-v2}
+    # "mfs-features-v2" by default; any other version fails closed to the DLT.
+    supported-feature-set-versions: ${APP_INTERPRETATION_SUPPORTED_FEATURE_SET_VERSIONS:mfs-features-v2}
+    quality:
+      max-feature-age-ms: ${APP_INTERPRETATION_QUALITY_MAX_FEATURE_AGE_MS:2000}
+      max-processing-latency-ms: ${APP_INTERPRETATION_QUALITY_MAX_PROCESSING_LATENCY_MS:1000}
+      block-future-events: ${APP_INTERPRETATION_QUALITY_BLOCK_FUTURE_EVENTS:true}
+    flow:
+      policy-version: mse-flow-v1
+      horizons:
+        "[1S]": { bullish-imbalance-threshold: 0.30, bearish-imbalance-threshold: -0.30, min-trade-count: 10, min-aggressive-trade-count: 5, max-unknown-side-ratio: 0.5 }
+        "[5S]": { bullish-imbalance-threshold: 0.30, bearish-imbalance-threshold: -0.30, min-trade-count: 10, min-aggressive-trade-count: 5, max-unknown-side-ratio: 0.5 }
+        "[15S]": { bullish-imbalance-threshold: 0.30, bearish-imbalance-threshold: -0.30, min-trade-count: 15, min-aggressive-trade-count: 5, max-unknown-side-ratio: 0.5 }
+        "[60S]": { bullish-imbalance-threshold: 0.30, bearish-imbalance-threshold: -0.30, min-trade-count: 30, min-aggressive-trade-count: 5, max-unknown-side-ratio: 0.5 }
+    momentum:
+      policy-version: mse-momentum-v1
+      horizons:
+        "[5S]": { bullish-price-change-bps-threshold: 2, bearish-price-change-bps-threshold: -2, full-strength-abs-move-bps: 10, max-safe-abs-move-bps: 50 }
+        "[15S]": { bullish-price-change-bps-threshold: 3, bearish-price-change-bps-threshold: -3, full-strength-abs-move-bps: 15, max-safe-abs-move-bps: 75 }
+        "[60S]": { bullish-price-change-bps-threshold: 5, bearish-price-change-bps-threshold: -5, full-strength-abs-move-bps: 25, max-safe-abs-move-bps: 120 }
+    volatility:
+      policy-version: mse-volatility-v1
+      horizons:
+        "[1S]": { low-upper-bound-bps: 2, normal-upper-bound-bps: 8, high-upper-bound-bps: 15 }
+        "[5S]": { low-upper-bound-bps: 2, normal-upper-bound-bps: 8, high-upper-bound-bps: 15 }
+        "[15S]": { low-upper-bound-bps: 3, normal-upper-bound-bps: 10, high-upper-bound-bps: 20 }
+        "[60S]": { low-upper-bound-bps: 4, normal-upper-bound-bps: 12, high-upper-bound-bps: 25 }
+    book:
+      policy-version: mse-book-v1
+      minimum-levels-used: 5
+      bullish-top5-imbalance-threshold: 0.30
+      bearish-top5-imbalance-threshold: -0.30
+      bullish-microprice-offset-bps-threshold: 2
+      bearish-microprice-offset-bps-threshold: -2
+      full-strength-abs-microprice-offset-bps: 10
+      max-safe-abs-microprice-offset-bps: 50
+    horizon:
+      policy-version: mse-horizon-v1
+    cross-horizon:
+      policy-version: mse-cross-horizon-v1
+    opportunity:
+      policy-version: mse-opportunity-v1
+      allow-volatile-momentum-continuation: ${APP_INTERPRETATION_ALLOW_VOLATILE_MOMENTUM_CONTINUATION:false}
+    validity:
+      policy-version: mse-validity-v1
+      momentum-continuation-base-validity-ms:
+        "[1S]": 1500
+        "[5S]": 2000
+        "[15S]": 5000
+        "[60S]": 15000
+      no-opportunity-base-validity-ms: 2000
+      blocked-base-validity-ms: 5000
+      publication-safety-buffer-ms: 250
+      degraded-quality-adjustment-ms: 250
+      volatile-regime-adjustment-ms: 250

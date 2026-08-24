@@ -22,7 +22,8 @@ class InvalidPublisherConfigurationStartupTest {
             "spring.kafka.bootstrap-servers", "localhost:1",
             "app.kafka.schema-registry.url", "mock://invalid-config-test",
             "spring.kafka.listener.auto-startup", "false",
-            "spring.main.banner-mode", "off");
+            "spring.main.banner-mode", "off",
+            "app.interpretation.config-hash", "cfg-invalid-config-test-1");
 
     @Test
     void blankOutputTopicFailsStartup() {

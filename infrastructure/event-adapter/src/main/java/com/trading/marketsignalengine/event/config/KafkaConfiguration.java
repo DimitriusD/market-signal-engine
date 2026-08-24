@@ -1,7 +1,7 @@
 package com.trading.marketsignalengine.event.config;
 
 import com.trading.contracts.feature.MarketFeaturesSnapshotEvent;
-import com.trading.contracts.signal.MarketSignalSnapshotEvent;
+import com.trading.contracts.signal.MarketInterpretationSnapshotEvent;
 import com.trading.marketsignalengine.application.domain.validation.InvalidMarketFeaturesSnapshotException;
 import com.trading.marketsignalengine.event.mapper.AvroMappingException;
 import com.trading.marketsignalengine.event.metrics.DeadLetterMetrics;
@@ -66,7 +66,7 @@ public class KafkaConfiguration {
         // Explicit durability: idempotent producer (no duplicates from producer-internal retries,
         // exactly-once ordering per partition) and acks=all. Set in code so no profile can silently
         // weaken them; app-level duplicates after an ambiguous publish timeout remain possible
-        // (at-least-once) and are deduplicated downstream on the deterministic signalSnapshotId.
+        // (at-least-once) and are deduplicated downstream on the deterministic interpretationSnapshotId.
         props.put(ProducerConfig.ENABLE_IDEMPOTENCE_CONFIG, true);
         props.put(ProducerConfig.ACKS_CONFIG, "all");
         return props;
@@ -135,15 +135,15 @@ public class KafkaConfiguration {
     }
 
     @Bean
-    public ProducerFactory<String, MarketSignalSnapshotEvent> marketSignalsProducerFactory(
+    public ProducerFactory<String, MarketInterpretationSnapshotEvent> marketInterpretationsProducerFactory(
             KafkaProperties kafkaProperties,
             @Value("${app.kafka.schema-registry.url:http://localhost:8081}") String schemaRegistryUrl) {
         return new DefaultKafkaProducerFactory<>(avroProducerProps(kafkaProperties, schemaRegistryUrl));
     }
 
     @Bean
-    public KafkaTemplate<String, MarketSignalSnapshotEvent> marketSignalsKafkaTemplate(
-            ProducerFactory<String, MarketSignalSnapshotEvent> marketSignalsProducerFactory) {
-        return new KafkaTemplate<>(marketSignalsProducerFactory);
+    public KafkaTemplate<String, MarketInterpretationSnapshotEvent> marketInterpretationsKafkaTemplate(
+            ProducerFactory<String, MarketInterpretationSnapshotEvent> marketInterpretationsProducerFactory) {
+        return new KafkaTemplate<>(marketInterpretationsProducerFactory);
     }
 }
