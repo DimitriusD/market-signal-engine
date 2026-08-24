@@ -1925,6 +1925,97 @@ wiring, V1 projection, metrics, schema fingerprint, replay calibration, producti
 thresholds/defaults. Engine ще **не** готовий до paper trading: попереду assembler, validity, V2
 mapping і publishing.
 
+### Етап 9. MarketInterpretationSnapshot assembler і deterministic validity — ✅ реалізовано 2026-08-24
+
+**Мета:** єдиний safe pipeline `MarketFeaturesSnapshot + QualityAssessment +
+MarketInterpretationAssemblyPolicy → MarketInterpretationSnapshot`. Пакет
+`domain/interpretation/assembly`. Assembler рівно один раз запускає Stage 8
+`MarketOpportunityEvaluator` (⇒ consistency guard активний), будує lossless `FeatureLineage` через
+`FeatureLineageFactory`, бере `InterpretationLineage` з policy, резолвить deterministic validUntil і
+збирає existing aggregate через `MarketInterpretationSnapshot.builder()` — ID генерує тільки
+existing builder/`InterpretationSnapshotIdGenerator` (`ALGORITHM_VERSION` не змінено; pinned tests
+без змін).
+
+**Timestamp semantics:** `evaluatedAt = snapshot.evaluationTs = featureLineage.sourceEvaluationAt` —
+source market tick, ніколи wall clock / `computedAt` / assessedAt / publication time.
+`assessedAt = qualityAssessment.timing.assessedAt` — explicit instant Stage 3 freshness-перевірки;
+використовується лише щоб визначити remaining validity на момент assembly.
+
+**Exact validity formula** (`validUntil` — exclusive absolute deadline: valid ⇔ `t < validUntil`):
+
+```
+validUntil = sourceEvaluationAt
+           + baseValidity(status/type, setupHorizon)
+           − publicationSafetyBuffer
+           − qualityAdjustment   (DEGRADED, тільки candidate)
+           − regimeAdjustment    (cross regime VOLATILE, тільки candidate)
+remaining  = validUntil − assessedAt        (candidate active ⇔ remaining > 0)
+```
+
+**Processing latency не віднімається двічі:** `featureAgeMs = assessedAt − sourceEvaluationAt` уже
+містить upstream computation + transport + engine latency, тому deadline якориться до source tick і
+порівнюється з `assessedAt` — elapsed time списується рівно один раз; `processingLatencyMs`
+залишається окремим quality diagnostic/gate (тест: зміна `computedAt` при тих самих
+`sourceEvaluationAt`/`assessedAt` не змінює validity). Майбутній engine publish latency
+представлений explicit `publicationSafetyBuffer`.
+
+**Base selection** (`InterpretationValidityPolicy`, immutable, whole-ms, без production defaults):
+horizon-aware map `momentumContinuationBaseValidity` рівно з чотирма canonical horizons (setup
+horizon обирає duration; зараз резолвиться лише H5S), окремі `noOpportunityBaseValidity` /
+`blockedBaseValidity`; невідомий candidate type і `OpportunityStatus.UNKNOWN` → fail-fast (ніколи
+випадковий TTL). Policy-інваріанти: bases строго позитивні ≥1ms, adjustments non-negative, whole-ms,
+long-representable, overflow-checked; кожен candidate base > buffer+degraded+volatile і кожен
+non-candidate base > buffer — policy сама не може створити `validUntil <= evaluatedAt`; map
+defensively copied/unmodifiable з canonical порядком.
+
+**Candidate expiration downgrade:** `remaining <= 0` (exclusive: `assessedAt == validUntil` ⇒
+expired) ⇒ effective opportunity = свіжий `MarketOpportunity.noOpportunity` рівно з
+`[OPPORTUNITY_NO_OPPORTUNITY, OPPORTUNITY_EXPIRED_BEFORE_ASSEMBLY]`
+(`InterpretationValidityReasonCodes`), type/side NONE, без setup/strength/invalidators; validUntil
+перераховується як `sourceEvaluationAt + noOpportunityBaseValidity − buffer`; original
+`MarketOpportunityEvaluation` не мутується; snapshot залишається domain-valid. Expired candidate
+ніколи не виходить active.
+
+**Lineage mapping** (без замін на unknown/zero/fake): `snapshotId→sourceFeatureEventId`,
+`schemaVersion→sourceFeatureSchemaVersion`, `featureSetVersion→sourceFeatureSetVersion`,
+`configHash→sourceFeatureConfigHash`, `evaluationTs→sourceEvaluationAt`,
+`computedAt→sourceComputedAt`, `triggerSource→sourceTriggerSource`.
+`MarketInterpretationAssemblyPolicy(interpretationVersion, interpretationConfigHash,
+opportunityPolicy, validityPolicy)` віддає `interpretationLineage()`; config hash — реальний, від
+caller-а (без `hashCode()`/serialization; canonical hashing — пізніший етап), і caller відповідає,
+щоб він покривав opportunity + cross-horizon + horizon/evidence + validity policies.
+
+**Deterministic ID:** same FeatureLineage + same InterpretationLineage ⇒ same id; зміна будь-якого
+lineage-поля (source event id, schema/set version, feature config hash, evaluation tick, trigger,
+interpretation version/config hash) змінює id; validUntil/assessedAt/результати/wall
+clock/sourceComputedAt в id не входять.
+
+**Safe boundary:** validity resolver і `ValidityResolution` — package-private; єдиний public вхід —
+`MarketInterpretationSnapshotAssembler.assemble(snapshot, qualityAssessment, policy)`; public API,
+що приймає готові `MarketOpportunityEvaluation`/`CrossHorizonEvaluation`/`HorizonAssessments`/
+`CrossHorizonAssessment`/`MarketOpportunity`/`FeatureLineage`, свідомо не існує (reflection-pinned)
+— evaluation ще не несе source feature event id, тож його можна було б підмішати до іншого
+snapshot. Source-scan тест підтверджує: пакет не читає wall clock (`Instant#now`,
+`System#currentTimeMillis`, `java.util.Date`, clock API) — same input + policy ⇒ value-equal
+snapshot із тим самим id.
+
+Тести: +38 (878 загалом, 0 failures, 0 errors, 0 skipped): policy invariants (map/durations/
+overflow/deduction bounds/immutability), base selection + adjustments (candidate-only degraded/
+volatile, сумування), feature-age формула (0/1/399/400/401 ms, exclusive boundary, 1 ms → active),
+latency-not-double-charged, expiration downgrade (exact reasons, no mutation), verbatim mapping +
+lossless lineage, ID determinism (version/hash/source змінюють id), quality-state матриця (OK/
+DEGRADED valid/DEGRADED expired/UNSAFE/NO_DATA/stale/clock-skew), safe-boundary reflection, no-wall-
+clock source scan, 10 e2e сценаріїв через реальні Stage 3–8 evaluators.
+
+**Runtime isolation:** V1 engine, Kafka input/output, metrics, schemas — без змін; assembly layer —
+pure domain без Spring wiring.
+
+**Не входить в Етап 9 (Етап 10+):** V2 Avro schema/mapper, Kafka publisher/listener/topic, Spring
+wiring, runtime activation, V1 projection, BUY/SELL/execution, expected return/confidence/edge/
+cost, replay calibration, adaptive decay, canonical config hashing, metrics, schema fingerprint,
+explanation text, outcome capture. Engine ще **не** готовий до paper trading — потрібні V2 mapper і
+publisher.
+
 ## 16. Test strategy
 
 ### Unit tests
