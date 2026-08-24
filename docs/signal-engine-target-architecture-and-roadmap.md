@@ -1843,6 +1843,88 @@ schema-fingerprint tests, replay calibration, threshold tuning, numeric voting/w
 tracking. **Milestone B (domain-частина) завершена**: per-horizon + cross-horizon interpretation
 готові; публікація V2 assessments — окремий наступний етап.
 
+### Етап 8. Deterministic market opportunity resolution — ✅ реалізовано 2026-08-24
+
+**Мета:** детермінований resolver `QualityAssessment + CrossHorizonEvaluation +
+OpportunityInterpretationPolicy → MarketOpportunity` + безпечна application boundary `snapshot +
+QualityAssessment + OpportunityInterpretationPolicy → MarketOpportunityEvaluation` (quality, cross
+evaluation і побудований саме з них opportunity разом). Пакет `domain/interpretation/opportunity`.
+**Candidate — не торговий наказ**: CANDIDATE LONG ≠ BUY, CANDIDATE SHORT ≠ SELL — це лише виявлений
+ринковий setup для подальшої strategy/execution evaluation. Перша версія свідомо підтримує тільки
+MOMENTUM_CONTINUATION LONG/SHORT, NO_OPPORTUNITY і BLOCKED; `SHORT_TERM_REVERSAL` не
+використовується, хоча enum існує.
+
+**Exact decision matrix:**
+
+1. **Quality gate (абсолютний пріоритет):** `eligibleForTrading == false` ⇒ `BLOCKED` (type/side
+   NONE, без setupHorizon/strength/invalidators), reasons = `OPPORTUNITY_BLOCKED_BY_QUALITY` + typed
+   quality codes у вихідному порядку (без парсингу strings). Eligible snapshot ніколи не BLOCKED;
+   DEGRADED + eligible=true може дати candidate. **BLOCKED ≠ NO_OPPORTUNITY**: BLOCKED — заборона
+   використовувати snapshot; NO_OPPORTUNITY — чесний негативний результат дозволеного пошуку.
+2. **Cross-horizon gate:** тільки `ALIGNED_BULLISH` → LONG-гілка / `ALIGNED_BEARISH` → SHORT-гілка;
+   PARTIALLY_ALIGNED / CONFLICTING / NEUTRAL / INSUFFICIENT_DATA / UNKNOWN ⇒ NO_OPPORTUNITY з
+   відповідним cross cause. **PARTIALLY_ALIGNED ніколи не candidate** — різні partial-сценарії мають
+   різну торгову природу, і без replay/outcome evidence не вгадуємо, які з них прибуткові.
+3. **Independent evidence:** один feature family не створює opportunity. Обов'язково одночасно:
+   H15S MOMENTUM = AVAILABLE + напрямок кандидата (persistence) **і** H5S FLOW = AVAILABLE + напрямок
+   кандидата (активний trigger); H60S — senior context із самого alignment. NEUTRAL / MIXED /
+   UNKNOWN / UNAVAILABLE / UNTRUSTED / FAILED / протилежний напрямок — не confirmation.
+4. **Book contradiction:** AVAILABLE Book на eligible participating horizon, opposite або MIXED ⇒
+   NO_OPPORTUNITY; same-direction Book не додає strength; neutral/unavailable Book не блокує і не
+   вигадує confirmation; Book сам ніколи не створює candidate.
+5. **Strength:** тільки `crossHorizonAssessment.evidenceStrength()`, без перерахунку: null ⇒
+   `OPPORTUNITY_STRENGTH_UNAVAILABLE`, zero ⇒ `OPPORTUNITY_STRENGTH_ZERO`; жодного прихованого
+   numeric minimum вище нуля до replay calibration; candidate переносить strength без змін.
+6. **Regime policy:** TRENDING — сумісний; VOLATILE — тільки explicit versioned switch
+   `allowVolatileMomentumContinuation` (true ⇒ candidate + `OPPORTUNITY_VOLATILE_REGIME_ALLOWED`,
+   false ⇒ `OPPORTUNITY_VOLATILE_REGIME_BLOCKED_BY_POLICY`); RANGING/QUIET ⇒
+   `OPPORTUNITY_REGIME_NOT_CONTINUATION_COMPATIBLE`; UNKNOWN/null ⇒ `OPPORTUNITY_REGIME_UNKNOWN`.
+   HIGH vs EXTREME не розрізняється (cross model дає лише `VOLATILE`).
+
+**Candidate mapping:** ALIGNED_* + усі gates ⇒ `MOMENTUM_CONTINUATION`, side LONG/SHORT,
+`setupHorizon = H5S` завжди (trigger-роль; ніколи H1S / dominant / найсильніший horizon),
+evidenceStrength = cross strength. Reasons у детермінованому порядку: candidate → side →
+H60/H15/H5 confirms → regime. Для aligned NO_OPPORTUNITY всі порушені gates звітуються разом у
+порядку evidence → book → strength → regime. Кожен candidate несе повний immutable список
+`OpportunityInvalidationCodes.ALL` (quality → alignment → H15 momentum → H5 flow → book → strength
+→ regime) — майбутні умови скасування; на момент створення жоден не істинний. Каталоги:
+`OpportunityReasonCodes` (23 typed коди, префікс `OPPORTUNITY_`), `OpportunityInvalidationCodes`
+(7, префікс `OPPORTUNITY_INVALIDATE_`).
+
+**Safe boundary:** `OpportunityResolver` — package-private pure class (читає тільки typed поля, без
+clock/Spring/Kafka/metrics, без probability/confidence/edge/cost); єдиний public вхід —
+`MarketOpportunityEvaluator.evaluate(snapshot, qualityAssessment, policy)`, який рівно один раз
+викликає Stage 7 `CrossHorizonAssessmentEvaluator` (⇒ consistency guard активний) і повертає
+`MarketOpportunityEvaluation` (package-private constructor, value semantics, reference-consistency:
+BLOCKED ⇔ !eligibleForTrading, ніколи UNKNOWN, setup horizon eligible + participating). Public API,
+що приймає `HorizonAssessments`/`CrossHorizonAssessment`/`CrossHorizonEvaluation`, свідомо не існує
+(reflection-pinned). `OpportunityInterpretationPolicy(policyVersion, crossHorizonPolicy,
+allowVolatileMomentumContinuation)` — без weights/thresholds/production defaults/Spring bean.
+Також уточнено Javadoc `CrossHorizonAlignment` під Stage 7 semantics (structural-only alignment,
+H1S ніколи в conflictingHorizons) без зміни поведінки.
+
+Тести: +55 (840 загалом, 0 failures, 0 errors, 0 skipped): quality gate (unsafe/no-data/unknown,
+degraded-but-eligible candidate, aligned не обходить block), повна cross-alignment матриця,
+LONG/SHORT symmetry, independent evidence (neutral/opposite/mixed/unknown/unavailable/untrusted/
+failed/відсутній для H15 momentum і H5 flow, flow-only/momentum-only/both-missing), book gate
+(opposite/mixed блокують на будь-якому participating horizon, same-direction/neutral/unavailable
+ні, book сам не створює), strength (exact carry, null/zero, без hidden minimum), regime матриця +
+volatile switch + null regime + side не фліпається, повний multi-gate reason order, invalidation
+codes, determinism/immutability/non-mutation, safe-boundary reflection, 10 e2e сценаріїв через
+реальні Stage 3–7 evaluators (bullish/bearish continuation, flow-only, momentum-only, senior
+conflict, history gap, adverse H1S, book contradiction, blocked quality, volatile policy).
+
+**Runtime isolation:** V1 engine, Kafka input/output, metrics, schemas — без змін; opportunity layer
+— pure domain без Spring wiring.
+
+**Не входить в Етап 8 (Етап 9+):** BUY/SELL/order/position/quantity/leverage/entry/stop/take-profit/
+execution/routing, expected return/probability/confidence/edge/fee/slippage, forecast model,
+reversal/pullback (`SHORT_TERM_REVERSAL`), temporal state machine і validity/validUntil,
+`MarketInterpretationSnapshot` runtime assembler, V2 Avro mapper/publisher, Kafka listener, Spring
+wiring, V1 projection, metrics, schema fingerprint, replay calibration, production
+thresholds/defaults. Engine ще **не** готовий до paper trading: попереду assembler, validity, V2
+mapping і publishing.
+
 ## 16. Test strategy
 
 ### Unit tests
