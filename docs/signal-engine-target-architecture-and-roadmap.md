@@ -822,6 +822,55 @@ required horizons eligible
 
 Точні thresholds/weights не вважаються універсальними й мають бути versioned та replay-tested.
 
+### 11.7. Cross-horizon hierarchy (Етап 7)
+
+Cross-horizon interpretation — **ієрархічна**, а не демократична. Engine свідомо не використовує
+equal voting, усереднення чотирьох горизонтів, numeric weights чи вибір найсильнішого горизонту.
+Фіксовані ролі (semantics поточної algorithm version, не конфігурація):
+
+| Horizon | Роль |
+|---|---|
+| `H60S` | senior market context |
+| `H15S` | market structure / persistence |
+| `H5S` | trade trigger |
+| `H1S` | micro/execution context |
+
+Structural горизонти — `H60S/H15S/H5S`. `H1S` не є рівноправним голосом: він ніколи не anchor, не
+structural confirmation і не потрапляє в `conflictingHorizons`; він може лише додати supportive
+reason або (opposite/MIXED) перевести повний alignment у `PARTIALLY_ALIGNED` і обнулити aggregate
+strength — напрямок старших горизонтів він не змінює ніколи (micro-noise не повинен розвертати
+senior direction).
+
+**Directional anchor:** eligible directional `H60S`, інакше eligible directional `H15S`, інакше
+anchor відсутній. Strength у виборі не бере участі; `H5S/H1S` не можуть бути anchor. Anchor =
+`dominantHorizon` кожного directional/conflicting verdict.
+
+**Minimum two-structural confirmation:** directional cross-horizon висновок потребує щонайменше двох
+structural горизонтів на напрямку anchor (anchor рахується). Один directional горизонт — навіть
+`H60S`, навіть із `H1S`-підтримкою — це `INSUFFICIENT_DATA`, а не опублікований напрямок.
+
+**Verdicts:**
+
+- `ALIGNED_BULLISH/BEARISH` — `H60S+H15S+H5S` eligible, directional, однобічні; `H1S` без adverse
+  context (neutral/unavailable `H1S` alignment не руйнує);
+- `PARTIALLY_ALIGNED` — anchor + ≥2 confirmations без structural conflict, але без повного
+  alignment (у т.ч. adverse `H1S` поверх трьох aligned structural); direction = напрямок anchor,
+  `conflictingHorizons` порожній;
+- `CONFLICTING` — інший structural горизонт opposite до anchor або MIXED; direction `MIXED`,
+  strength `null`, conflict має пріоритет над partial/aligned;
+- `NEUTRAL` — без anchor, усі participating structural neutral, хоча б один neutral `H60S/H15S`;
+  neutral лише на `H5S/H1S` недостатній;
+- `INSUFFICIENT_DATA` — решта (без anchor, один directional structural, лише junior directions
+  тощо); `UNKNOWN` не є нормальним verdict для валідного typed input.
+
+**Strength** — мінімум по confirming structural горизонтах (`null`, якщо хоч один без strength або
+`H1S` adverse); ніколи не average/weights/бонус від `H1S`. **Regime** — з dominant горизонту, інакше
+senior-first fallback `H60S→H15S→H5S→H1S` серед eligible participants (typed поля, без
+re-derivation). Деталі й reason-code порядок — Етап 7 у roadmap.
+
+Opportunity selection (`MOMENTUM_CONTINUATION` тощо, §11.6) — наступний етап поверх
+`CrossHorizonAssessment`.
+
 ## 12. Validity semantics
 
 ### 12.1. Визначення
@@ -1730,6 +1779,69 @@ NO_TRADE, probability/confidence, expected edge/costs, V2 Avro mapper/publisher/
 assembler `MarketInterpretationSnapshot`, Spring wiring, shadow mode, metrics, replay loader,
 production thresholds. **Milestone B не завершений**: per-horizon interpretation готова, cross-horizon
 interpretation ще ні.
+
+### Етап 7. Hierarchical cross-horizon interpretation — ✅ реалізовано 2026-08-24
+
+**Мета** (§11.7; Фаза 6→7): детермінований hierarchical interpreter `HorizonAssessments →
+CrossHorizonAssessment` + безпечна application boundary `snapshot + QualityAssessment +
+CrossHorizonInterpretationPolicy → CrossHorizonEvaluation` (horizon assessments і побудований саме з
+них cross assessment разом). Без opportunity/BUY/SELL/execution, без Kafka/Spring/metrics. Пакет
+`domain/interpretation/cross`.
+
+**Ієрархія і алгоритм** (повна семантика — §11.7): фіксовані ролі H60S senior context / H15S
+structure / H5S trigger / H1S micro-context, без configurable weights. Порядок resolution:
+participants (ELIGIBLE + direction != UNKNOWN, canonical order) → anchor (directional H60S, інакше
+H15S; strength-blind; H5S/H1S ніколи) → structural conflict (opposite/MIXED проти anchor серед
+H60S/H15S/H5S ⇒ `CONFLICTING`, direction MIXED, strength null, dominant = anchor, conflict має
+пріоритет) → minimum two-structural confirmation (інакше `INSUFFICIENT_DATA`) → `ALIGNED_*` (три
+structural однобічні + H1S без adverse context) або `PARTIALLY_ALIGNED` (direction = anchor,
+conflicts порожні, adverse H1S — лише reason code). Без anchor: `NEUTRAL` тільки коли всі
+participating structural neutral і хоча б один neutral H60S/H15S, інакше `INSUFFICIENT_DATA`;
+`UNKNOWN` не повертається для валідного typed input.
+
+**Strength aggregation:** min по confirming structural (H1S виключений); `null`, якщо хоч один
+confirmation без strength, при adverse H1S, для `CONFLICTING`/`INSUFFICIENT_DATA`; `NEUTRAL` =
+реальний `EvidenceStrength.MIN`. Жодних average/penalty/bonus. **Regime:** usable (non-null,
+non-UNKNOWN) regime dominant горизонту → інакше перший usable у role order H60S→H15S→H5S→H1S серед
+eligible participants → інакше `MarketRegime.UNKNOWN`; `null` лише для `INSUFFICIENT_DATA`.
+Джерело видно з reason code (`FROM_DOMINANT`/`FALLBACK`/`UNKNOWN`); без re-read volatility/momentum
+і без voting.
+
+**Reason codes** (`CrossHorizonReasonCodes`, 17 typed кодів, префікс `CROSS_`): verdict → dominant
+(`CROSS_H60_CONTEXT_DOMINANT`/`CROSS_H15_STRUCTURE_DOMINANT`) або
+`CROSS_HORIZON_NO_DIRECTIONAL_ANCHOR`/`CROSS_HORIZON_INSUFFICIENT_STRUCTURAL_CONFIRMATION` → H5S
+trigger (`CONFIRMS`/`CONTRADICTS`) → H1S micro-context (`SUPPORTS`/`ADVERSE`) → regime source.
+Детермінований порядок. Interpreter читає лише typed поля (eligibility, direction, strength, regime,
+horizon) — жодного парсингу reason-code strings із HorizonAssessment.
+
+**Safe boundary:** `CrossHorizonInterpreter` — package-private pure class (без clock/broker/Spring,
+не мутує input); єдиний public вхід — `CrossHorizonAssessmentEvaluator.evaluate(snapshot,
+qualityAssessment, policy)`, який рівно один раз викликає Stage 6 `HorizonAssessmentEvaluator` і
+віддає обидва результати в `CrossHorizonEvaluation` (package-private constructor, value semantics,
+reference-consistency перевірки: кожен participating/dominant/conflicting horizon резолвиться проти
+саме цих assessments). Public API, що приймає вручну зібрані `HorizonAssessments`, свідомо не існує
+(reflection-pinned). `CrossHorizonInterpretationPolicy(policyVersion, horizonPolicy)` — versioned
+aggregate без weights/thresholds/production defaults.
+
+Тести: +47 (785 загалом, 0 failures, 0 skipped): anchor hierarchy (strength-blind, H5S/H1S ніколи
+dominant), full/partial alignment (bullish+bearish, unusable H15S/H60S, adverse H1S downgrade),
+conflicts (senior vs senior, trigger, structural MIXED, кілька conflicts у canonical order, anchor
+і H1S ніколи в conflicts), H1S role (не confirmation, не conflict, supports без strength-бонусу),
+neutral vs insufficient (junior-only neutral → insufficient, lone anchor → insufficient), strength
+(min, null-propagation), regime provenance (dominant/fallback/skip non-participants/UNKNOWN),
+policy/evaluation invariants, reason-catalog, safe-boundary reflection, e2e зі справжнім Stage 3
+resolver (fully bullish snapshot → ALIGNED_BULLISH; history gap 1S/5S-only → INSUFFICIENT_DATA),
+determinism.
+
+**Runtime isolation:** V1 engine, Kafka input/output, metrics, schemas — без змін; cross layer —
+pure domain без Spring wiring.
+
+**Не входить в Етап 7 (Етап 8+):** `TradeOpportunity`/BUY/SELL/position/entry/stop/execution
+policy, pullback/reversal і temporal transition detection (потребують temporal state або replay
+evidence — не з одного snapshot), V2 Avro mapper/publisher/topic, Spring wiring, metrics,
+schema-fingerprint tests, replay calibration, threshold tuning, numeric voting/weights, outcome
+tracking. **Milestone B (domain-частина) завершена**: per-horizon + cross-horizon interpretation
+готові; публікація V2 assessments — окремий наступний етап.
 
 ## 16. Test strategy
 
