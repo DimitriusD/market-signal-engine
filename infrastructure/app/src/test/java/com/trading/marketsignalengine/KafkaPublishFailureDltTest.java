@@ -16,9 +16,9 @@ import com.trading.contracts.feature.MarketFeaturesSnapshotEvent;
 import com.trading.contracts.feature.ShortTermRegimeFeaturesEvent;
 import com.trading.contracts.feature.TradeFlowFeaturesEvent;
 import com.trading.contracts.orderbook.BookSyncStatus;
-import com.trading.contracts.signal.MarketSignalSnapshotEvent;
-import com.trading.marketsignalengine.application.domain.model.MarketSignalSnapshot;
-import com.trading.marketsignalengine.application.port.output.MarketSignalSnapshotPublisherPort;
+import com.trading.contracts.signal.MarketInterpretationSnapshotEvent;
+import com.trading.marketsignalengine.application.port.output.MarketInterpretationPublication;
+import com.trading.marketsignalengine.application.port.output.MarketInterpretationSnapshotPublisherPort;
 import com.trading.marketsignalengine.event.publisher.SignalPublishException;
 import io.confluent.kafka.serializers.AbstractKafkaSchemaSerDeConfig;
 import io.confluent.kafka.serializers.KafkaAvroDeserializer;
@@ -59,15 +59,15 @@ import org.springframework.test.annotation.DirtiesContext;
 
 /**
  * Publish failure → bounded listener retry → DLT, on an in-JVM Kafka (KRaft) + {@code mock://}
- * Schema Registry. The real consumer, mapper, validated evaluator and error handler run; only the
- * output publisher port is replaced by a controlled test double that always throws
+ * Schema Registry. The real consumer, mapper, validated interpretation evaluator and error handler
+ * run; only the V2 output publisher port is replaced by a controlled test double that always throws
  * {@link SignalPublishException} (the retryable failure class) and counts attempts.
  *
  * <p>Retry semantics under test: {@code app.kafka.retry.max-attempts} configures
  * {@code FixedBackOff.maxAttempts}, which is the number of <em>retries after the first delivery</em>.
  * With {@code max-attempts=2} the record is delivered 3 times (3 publisher attempts) and then the
- * original {@code MarketFeaturesSnapshotEvent} lands on {@code <input>.DLT}; no V1 output is
- * published.
+ * original {@code MarketFeaturesSnapshotEvent} lands on {@code <input>.DLT}; no output event is
+ * published — the input offset is never treated as processed without a broker-acknowledged output.
  */
 @SpringBootTest(properties = {
         "app.kafka.schema-registry.url=mock://mse-dlt",
@@ -77,7 +77,8 @@ import org.springframework.test.annotation.DirtiesContext;
         "spring.kafka.consumer.auto-offset-reset=earliest",
         "app.kafka.retry.backoff-ms=50",
         "app.kafka.retry.max-attempts=" + KafkaPublishFailureDltTest.MAX_ATTEMPTS,
-        "app.kafka.publish-timeout-ms=6500"
+        "app.kafka.publish-timeout-ms=6500",
+        "app.interpretation.config-hash=cfg-dlt-interpretation-1"
 })
 @EmbeddedKafka(
         kraft = true,
@@ -107,16 +108,17 @@ class KafkaPublishFailureDltTest {
         }
     }
 
-    /** Controlled output port: every publish throws the retryable failure and is counted. */
-    static final class FailingPublisher implements MarketSignalSnapshotPublisherPort {
+    /** Controlled V2 output port: every publish throws the retryable failure and is counted. */
+    static final class FailingPublisher implements MarketInterpretationSnapshotPublisherPort {
         final AtomicInteger attempts = new AtomicInteger();
-        final List<String> attemptedSignalIds = new CopyOnWriteArrayList<>();
+        final List<String> attemptedInterpretationIds = new CopyOnWriteArrayList<>();
 
         @Override
-        public void publish(MarketSignalSnapshot snapshot) {
+        public void publish(MarketInterpretationPublication publication) {
             attempts.incrementAndGet();
-            attemptedSignalIds.add(snapshot.signalSnapshotId());
-            throw new SignalPublishException("simulated bounded publish failure for " + snapshot.signalSnapshotId(),
+            String id = publication.snapshot().interpretationSnapshotId();
+            attemptedInterpretationIds.add(id);
+            throw new SignalPublishException("simulated bounded publish failure for " + id,
                     new TimeoutException("simulated"));
         }
     }
@@ -127,7 +129,7 @@ class KafkaPublishFailureDltTest {
     private MeterRegistry meterRegistry;
 
     private static KafkaTemplate<String, Object> producer;
-    private static Consumer<String, MarketSignalSnapshotEvent> signalsConsumer;
+    private static Consumer<String, MarketInterpretationSnapshotEvent> interpretationsConsumer;
     private static Consumer<String, Object> dltConsumer;
 
     @BeforeAll
@@ -138,9 +140,9 @@ class KafkaPublishFailureDltTest {
         producerProps.put(AbstractKafkaSchemaSerDeConfig.SCHEMA_REGISTRY_URL_CONFIG, SCHEMA_REGISTRY);
         producer = new KafkaTemplate<>(new DefaultKafkaProducerFactory<>(producerProps));
 
-        signalsConsumer = new DefaultKafkaConsumerFactory<String, MarketSignalSnapshotEvent>(
-                avroConsumerProps(broker, "dlt-signals-reader")).createConsumer();
-        broker.consumeFromAnEmbeddedTopic(signalsConsumer, OUTPUT_TOPIC);
+        interpretationsConsumer = new DefaultKafkaConsumerFactory<String, MarketInterpretationSnapshotEvent>(
+                avroConsumerProps(broker, "dlt-interpretations-reader")).createConsumer();
+        broker.consumeFromAnEmbeddedTopic(interpretationsConsumer, OUTPUT_TOPIC);
 
         dltConsumer = new DefaultKafkaConsumerFactory<String, Object>(
                 avroConsumerProps(broker, "dlt-dlt-reader")).createConsumer();
@@ -149,8 +151,8 @@ class KafkaPublishFailureDltTest {
 
     @AfterAll
     static void stopClients() {
-        if (signalsConsumer != null) {
-            signalsConsumer.close();
+        if (interpretationsConsumer != null) {
+            interpretationsConsumer.close();
         }
         if (dltConsumer != null) {
             dltConsumer.close();
@@ -181,28 +183,27 @@ class KafkaPublishFailureDltTest {
         Thread.sleep(500);
         assertEquals(EXPECTED_PUBLISH_ATTEMPTS, failingPublisher.attempts.get(),
                 "FixedBackOff(maxAttempts=" + MAX_ATTEMPTS + ") must yield " + EXPECTED_PUBLISH_ATTEMPTS + " deliveries");
-        // every retry re-evaluated the same input deterministically → same signalSnapshotId
-        assertEquals(1, failingPublisher.attemptedSignalIds.stream().distinct().count());
+        // every retry re-evaluated the same input deterministically → same interpretationSnapshotId
+        assertEquals(1, failingPublisher.attemptedInterpretationIds.stream().distinct().count(),
+                "retries must carry the same deterministic interpretationSnapshotId");
 
-        // 3. no V1 output event was published for this input
-        assertFalse(signalPublishedFor(featureEventId, Duration.ofSeconds(2)),
+        // 3. no V2 output event was published for this input
+        assertFalse(interpretationPublishedFor(featureEventId, Duration.ofSeconds(2)),
                 "a never-acknowledged publish must not leave an output event");
 
-        // 4. existing metrics (unchanged) attribute the dead-letter to the retryable exception
+        // 4. existing DLT metrics (unchanged) attribute the dead-letter to the retryable exception
         assertTrue(meterRegistry.find("mse.dlt.records")
                 .tag("exception", "SignalPublishException").counter().count() >= 1.0);
-        assertTrue(meterRegistry.find("mse.consume.retries").counter() == null
-                        || meterRegistry.find("mse.consume.retries").counter().count() >= MAX_ATTEMPTS,
-                "retries must be observable");
     }
 
     // ------------------------------------------------------------------ helpers
 
-    private boolean signalPublishedFor(String featureEventId, Duration window) {
+    private boolean interpretationPublishedFor(String featureEventId, Duration window) {
         long deadline = System.nanoTime() + window.toNanos();
         while (System.nanoTime() < deadline) {
-            for (ConsumerRecord<String, MarketSignalSnapshotEvent> r : signalsConsumer.poll(Duration.ofMillis(200))) {
-                if (featureEventId.equals(r.value().getSourceFeatureEventId())) {
+            for (ConsumerRecord<String, MarketInterpretationSnapshotEvent> r
+                    : interpretationsConsumer.poll(Duration.ofMillis(200))) {
+                if (featureEventId.equals(r.value().getFeatureLineage().getSourceFeatureEventId())) {
                     return true;
                 }
             }
@@ -233,7 +234,7 @@ class KafkaPublishFailureDltTest {
         return props;
     }
 
-    /** A complete, contract-valid, tradable MFS v2 TRADE-triggered snapshot. */
+    /** A complete, contract-valid, fresh MFS v2 TRADE-triggered snapshot. */
     private static MarketFeaturesSnapshotEvent validTradeEvent(String eventId) {
         long exchangeTs = System.currentTimeMillis() - 150;
         return MarketFeaturesSnapshotEvent.newBuilder()

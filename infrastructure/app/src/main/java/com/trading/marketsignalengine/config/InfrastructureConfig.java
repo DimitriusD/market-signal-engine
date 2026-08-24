@@ -186,8 +186,8 @@ public class InfrastructureConfig {
         // the config hash is a real deployment-provided value covering every policy above — the
         // engine never fabricates one (no hashCode(), no serialization; canonical hashing is a later stage)
         return new MarketInterpretationAssemblyPolicy(
-                req(properties.version(), "app.interpretation.version"),
-                req(properties.configHash(), "app.interpretation.config-hash"),
+                resolvedText(properties.version(), "app.interpretation.version"),
+                resolvedText(properties.configHash(), "app.interpretation.config-hash"),
                 opportunityInterpretationPolicy,
                 interpretationValidityPolicy);
     }
@@ -226,6 +226,21 @@ public class InfrastructureConfig {
     private static <T> T req(T value, String property) {
         if (value == null) {
             throw new IllegalStateException(property + " must be explicitly configured");
+        }
+        return value;
+    }
+
+    /**
+     * A mandatory text value that must have been really provided: Boot's binder keeps an
+     * unresolvable {@code ${ENV_VAR}} placeholder as a literal, which must never silently become a
+     * lineage value.
+     */
+    private static String resolvedText(String value, String property) {
+        req(value, property);
+        if (value.isBlank() || value.contains("${")) {
+            throw new IllegalStateException(property + " resolves to '" + value
+                    + "' — the deployment must provide a real value (e.g. via the environment variable"
+                    + " named in application.yml)");
         }
         return value;
     }
