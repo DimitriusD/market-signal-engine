@@ -6,8 +6,6 @@ import com.trading.marketsignalengine.application.domain.model.feature.FeatureDi
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureQuality;
 import com.trading.marketsignalengine.application.domain.model.feature.MarketFeaturesSnapshot;
 import com.trading.marketsignalengine.application.domain.model.feature.RegimeFeature;
-import com.trading.marketsignalengine.application.domain.model.SignalConfiguration;
-import com.trading.marketsignalengine.application.domain.model.SignalEvaluationContext;
 import com.trading.marketsignalengine.application.domain.model.SyncStatus;
 import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowFeature;
 import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowWindow;
@@ -15,6 +13,7 @@ import java.math.BigDecimal;
 import java.time.Instant;
 import java.util.List;
 
+/** Contract-valid MFS v2 snapshot fixtures shared by the V2 interpretation and runtime tests. */
 public final class SignalRuleTestSupport {
 
     /** Feature set every test fixture declares; validators in tests must allowlist it. */
@@ -23,10 +22,6 @@ public final class SignalRuleTestSupport {
     public static final Instant COMPUTED_AT = EVENT_TIME.plusMillis(25);
 
     private SignalRuleTestSupport() {
-    }
-
-    public static SignalEvaluationContext context(MarketFeaturesSnapshot features) {
-        return new SignalEvaluationContext(features, SignalConfiguration.defaults(), Instant.parse("2026-01-01T00:00:00Z"));
     }
 
     public static MarketFeaturesSnapshot defaultFeatures() {

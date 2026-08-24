@@ -5,7 +5,22 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
-import com.trading.marketsignalengine.application.domain.model.SignalConfiguration;
+import com.trading.marketsignalengine.application.domain.interpretation.assembly.InterpretationValidityPolicy;
+import com.trading.marketsignalengine.application.domain.interpretation.assembly.MarketInterpretationAssemblyPolicy;
+import com.trading.marketsignalengine.application.domain.interpretation.assembly.MarketInterpretationSnapshotAssembler;
+import com.trading.marketsignalengine.application.domain.interpretation.book.BookAssessmentPolicy;
+import com.trading.marketsignalengine.application.domain.interpretation.cross.CrossHorizonInterpretationPolicy;
+import com.trading.marketsignalengine.application.domain.interpretation.flow.FlowAssessmentPolicy;
+import com.trading.marketsignalengine.application.domain.interpretation.flow.FlowHorizonPolicy;
+import com.trading.marketsignalengine.application.domain.interpretation.horizon.HorizonInterpretationPolicy;
+import com.trading.marketsignalengine.application.domain.interpretation.momentum.MomentumAssessmentPolicy;
+import com.trading.marketsignalengine.application.domain.interpretation.momentum.MomentumHorizonPolicy;
+import com.trading.marketsignalengine.application.domain.interpretation.opportunity.OpportunityInterpretationPolicy;
+import com.trading.marketsignalengine.application.domain.interpretation.quality.QualityAssessmentResolver;
+import com.trading.marketsignalengine.application.domain.interpretation.quality.QualityEligibilityPolicy;
+import com.trading.marketsignalengine.application.domain.interpretation.volatility.VolatilityAssessmentPolicy;
+import com.trading.marketsignalengine.application.domain.interpretation.volatility.VolatilityHorizonPolicy;
+import com.trading.marketsignalengine.application.domain.model.MarketHorizon;
 import com.trading.marketsignalengine.application.domain.model.SyncStatus;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureDiagnostics;
 import com.trading.marketsignalengine.application.domain.model.feature.FeatureQuality;
@@ -14,16 +29,18 @@ import com.trading.marketsignalengine.application.domain.model.feature.MarketFea
 import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowFeature;
 import com.trading.marketsignalengine.application.domain.model.feature.TradeFlowWindow;
 import com.trading.marketsignalengine.application.domain.rule.SignalRuleTestSupport;
-import com.trading.marketsignalengine.application.domain.service.MarketSignalEngine;
-import com.trading.marketsignalengine.application.domain.service.StandardSignalEngine;
-import com.trading.marketsignalengine.application.port.output.MarketSignalSnapshotPublisherPort;
-import com.trading.marketsignalengine.application.service.MarketSignalHandleService;
-import com.trading.marketsignalengine.application.service.ValidatedMarketSignalEvaluator;
+import com.trading.marketsignalengine.application.port.output.MarketInterpretationPublication;
+import com.trading.marketsignalengine.application.service.MarketInterpretationHandleService;
+import com.trading.marketsignalengine.application.service.ValidatedMarketInterpretationEvaluator;
+import java.math.BigDecimal;
 import java.time.Clock;
+import java.time.Duration;
 import java.time.Instant;
 import java.time.ZoneOffset;
 import java.util.ArrayList;
+import java.util.EnumMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 import org.junit.jupiter.api.Test;
 
@@ -408,32 +425,14 @@ class MarketFeaturesSnapshotValidatorTest {
         assertDoesNotThrow(() -> validator.validate(valid().diagnostics(null).build()));
     }
 
-    // ------------------------------------------------------------------ end to end: not reaching engine/publisher
+    // ------------------------------------------------------------------ end to end: not reaching interpretation/publisher
 
     @Test
-    void invalidInputNeverReachesEngineOrPublisher() {
-        List<Instant> engineCalls = new ArrayList<>();
-        List<Object> published = new ArrayList<>();
-        MarketSignalEngine production = StandardSignalEngine.create(
-                SignalConfiguration.defaults(), Clock.fixed(EVENT_TIME, ZoneOffset.UTC));
-        MarketSignalEngine recording = new MarketSignalEngine() {
-            @Override
-            public com.trading.marketsignalengine.application.domain.model.MarketSignalSnapshot evaluate(
-                    MarketFeaturesSnapshot features) {
-                throw new AssertionError("live path must use the explicit-instant overload");
-            }
-
-            @Override
-            public com.trading.marketsignalengine.application.domain.model.MarketSignalSnapshot evaluate(
-                    MarketFeaturesSnapshot features, Instant evaluatedAt) {
-                engineCalls.add(evaluatedAt);
-                return production.evaluate(features, evaluatedAt);
-            }
-        };
-        MarketSignalSnapshotPublisherPort publisher = published::add;
-        MarketSignalHandleService service = new MarketSignalHandleService(
-                new ValidatedMarketSignalEvaluator(validator, recording), publisher,
-                Clock.fixed(EVENT_TIME, ZoneOffset.UTC));
+    void invalidInputNeverReachesInterpretationOrPublisher() {
+        List<MarketInterpretationPublication> published = new ArrayList<>();
+        MarketInterpretationHandleService service = new MarketInterpretationHandleService(
+                v2Evaluator(validator), published::add,
+                Clock.fixed(EVENT_TIME.plusMillis(100), ZoneOffset.UTC));
 
         List<MarketFeaturesSnapshot> invalid = List.of(
                 valid().configHash("").build(),
@@ -444,10 +443,9 @@ class MarketFeaturesSnapshotValidatorTest {
         for (MarketFeaturesSnapshot snapshot : invalid) {
             assertThrows(InvalidMarketFeaturesSnapshotException.class, () -> service.handle(snapshot));
         }
-        assertTrue(engineCalls.isEmpty(), "engine must not see invalid input");
-        assertTrue(published.isEmpty(), "publisher must not see invalid input");
+        assertTrue(published.isEmpty(), "interpretation/publisher must not see invalid input");
 
-        // ...while a valid but DEGRADED snapshot does reach the engine (and yields a no-trade output).
+        // ...while a valid but DEGRADED snapshot does reach the pipeline (and yields an output).
         service.handle(valid()
                 .quality(tradable().toBuilder()
                         .status(FeatureQualityStatus.DEGRADED)
@@ -455,8 +453,52 @@ class MarketFeaturesSnapshotValidatorTest {
                         .qualityReasons(List.of("WARMING_UP"))
                         .build())
                 .build());
-        assertEquals(1, engineCalls.size());
         assertEquals(1, published.size());
+    }
+
+    /** A minimal explicit V2 evaluator over the given validator (fixture policies). */
+    private static ValidatedMarketInterpretationEvaluator v2Evaluator(MarketFeaturesSnapshotValidator validator) {
+        HorizonInterpretationPolicy horizonPolicy = new HorizonInterpretationPolicy("horizon-fixture-v1",
+                FlowAssessmentPolicy.of("horizon-flow-v1",
+                        flowPolicy(MarketHorizon.H1S), flowPolicy(MarketHorizon.H5S),
+                        flowPolicy(MarketHorizon.H15S), flowPolicy(MarketHorizon.H60S)),
+                MomentumAssessmentPolicy.of("horizon-momentum-v1",
+                        momentumPolicy(MarketHorizon.H5S), momentumPolicy(MarketHorizon.H15S),
+                        momentumPolicy(MarketHorizon.H60S)),
+                VolatilityAssessmentPolicy.of("horizon-volatility-v1",
+                        volatilityPolicy(MarketHorizon.H1S), volatilityPolicy(MarketHorizon.H5S),
+                        volatilityPolicy(MarketHorizon.H15S), volatilityPolicy(MarketHorizon.H60S)),
+                new BookAssessmentPolicy("horizon-book-v1", 5, new BigDecimal("0.30"), new BigDecimal("-0.30"),
+                        new BigDecimal("2"), new BigDecimal("-2"), new BigDecimal("10"), new BigDecimal("50")));
+        EnumMap<MarketHorizon, Duration> base = new EnumMap<>(Map.of(
+                MarketHorizon.H1S, Duration.ofMillis(400), MarketHorizon.H5S, Duration.ofMillis(500),
+                MarketHorizon.H15S, Duration.ofMillis(1_500), MarketHorizon.H60S, Duration.ofMillis(5_000)));
+        return new ValidatedMarketInterpretationEvaluator(
+                validator,
+                new QualityAssessmentResolver(),
+                new MarketInterpretationSnapshotAssembler(),
+                QualityEligibilityPolicy.of(Duration.ofMillis(2_000), Duration.ofMillis(1_000), true),
+                new MarketInterpretationAssemblyPolicy(
+                        "mse-interpretation-fixture-v1", "cfg-interpretation-fixture-1",
+                        new OpportunityInterpretationPolicy("opportunity-fixture-v1",
+                                new CrossHorizonInterpretationPolicy("cross-fixture-v1", horizonPolicy), false),
+                        new InterpretationValidityPolicy("validity-fixture-v1", base,
+                                Duration.ofMillis(300), Duration.ofMillis(250),
+                                Duration.ofMillis(100), Duration.ofMillis(50), Duration.ofMillis(25))));
+    }
+
+    private static FlowHorizonPolicy flowPolicy(MarketHorizon horizon) {
+        return FlowHorizonPolicy.of(horizon, new BigDecimal("0.30"), new BigDecimal("-0.30"), 10, 5,
+                new BigDecimal("0.5"));
+    }
+
+    private static MomentumHorizonPolicy momentumPolicy(MarketHorizon horizon) {
+        return MomentumHorizonPolicy.of(horizon, new BigDecimal("2"), new BigDecimal("-2"),
+                new BigDecimal("10"), new BigDecimal("50"));
+    }
+
+    private static VolatilityHorizonPolicy volatilityPolicy(MarketHorizon horizon) {
+        return VolatilityHorizonPolicy.of(horizon, new BigDecimal("2"), new BigDecimal("8"), new BigDecimal("15"));
     }
 
     // ------------------------------------------------------------------ fixtures
